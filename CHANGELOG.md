@@ -2,6 +2,23 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## 4.22.0
+
+### 新增
+
+- **`gemini-4-argon` / `gemini-4-argon-thinking`（issue #35 / #36）**。接入 Gemini 网页端
+  「4 Argon」（otAQ7b 清单主 hex `95a4c0abcba24364`、代号 `Argon4p0`、desc「复杂任务」）。
+  付费 / Ultra 账号专属，免费号发它被静默降级成 3.5 Flash-Lite，故没 cookie 时不暴露、
+  也不走匿名。`-thinking` 版带 `reasoning_content`。
+  - 判据：拿一个 Ultra 号端到端实测，真正选中 Argon 的是 **MODE=8**（`x-goog-ext-525001261-jspb`
+    下标 14 / `inner[79]`）而不是 hex——单变量对照：hex=Argon 配 mode=1 回报「3.8 Flash」、
+    hex=Argon 配 mode=8 回报「4 Argon」、hex=3.8Flash 配 mode=8 也回报「4 Argon」（mode 决定、
+    hex 被忽略）。issue #35 给的 hex 没错，但只填 hex 不填对 mode 会落到 3.8 Flash。
+  - `-thinking`：mode=8 + `inner[80]=2`（上游把这档显示成 `High`）实测回报「4 Argon High」，
+    硬题下带 985 字符思考链，走既有 `[4][0][37][0][0]` 抽取路径，无需改代码即映射成
+    `reasoning_content`；同次对照 3.1 Pro 也回报「3.1 Pro High」（扩展思考后缀上游统一改叫
+    `High`，仅显示名变、抽取不变）。
+
 ## 4.21.0
 
 ### 新增
