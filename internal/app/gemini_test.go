@@ -50,13 +50,13 @@ func TestModelHeader(t *testing.T) {
 		}
 	}
 	// 守的是「不许冒出假模型」：thinking 版复用同样的 hex，所以看**去重后的 hex 数**，
-	// 不是条目数。服务端清单（otAQ7b）里 3.6/3.5-lite/3.1-pro + 灰度放出的 3.7 = 4 个。
+	// 不是条目数。服务端清单（otAQ7b）里 3.6/3.5-lite/3.1-pro/3.8-flash + 4 Argon（#35）= 5 个。
 	hexes := map[string]bool{}
 	for _, m := range Models {
 		hexes[m.HexID] = true
 	}
-	if len(hexes) != 4 {
-		t.Errorf("只应存在 4 个真模型 hex, got %d", len(hexes))
+	if len(hexes) != 5 {
+		t.Errorf("只应存在 5 个真模型 hex, got %d", len(hexes))
 	}
 	// 反过来：每个真 hex 都应该有一个 thinking 版
 	for _, base := range []string{hexFlash36, hexFlashLite, hexPro31, hexFlash38} {
