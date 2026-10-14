@@ -94,6 +94,10 @@ var Models = map[string]ModelConfig{
 	"gemini-3.1-pro-thinking":        {HexID: hexPro31, Mode: 3, Thinking: true, Desc: "3.1 Pro with extended thinking; needs a signed-in cookie"},
 	"gemini-3.8-flash-thinking":      {HexID: hexFlash38, Mode: 1, Thinking: true, Desc: "3.8 Flash with extended thinking; needs a signed-in cookie"},
 	"gemini-3.7-flash-thinking":      {HexID: hexFlash38, Mode: 1, Thinking: true, Desc: "alias of gemini-3.8-flash-thinking"},
+	// 4 Argon + 扩展思考：Mode=8（选 Argon）+ inner[80]=2（上游现在把这档叫 "High"）。
+	// 实测回报 "4 Argon High" 且带思考链（硬题 985 字符，走既有 [4][0][37][0][0] 路径，
+	// 无需改抽取代码）→ 映射成 reasoning_content。付费/Ultra 专属。
+	"gemini-4-argon-thinking": {HexID: hexArgon4, Mode: 8, Thinking: true, Desc: "4 Argon with extended thinking (High reasoning tier); emits reasoning_content; needs a signed-in PAID/Ultra account"},
 
 	// 媒体生成。inner[49] 一填，服务端换后端模型出图/出乐；产物走 hNvQHb + 下载 host
 	// 取回，以 base64 data URL 塞进 content 返回。都要登录态，没 cookie 时不暴露。
