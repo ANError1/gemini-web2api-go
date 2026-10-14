@@ -247,10 +247,12 @@ Gemini's backend only recognises three models (the list comes from `batchexecute
 | `gemini-3.5-flash-lite` | Fast and lightweight |
 | `gemini-3.1-pro` | Most capable, **needs a cookie**; every reply carries a reasoning chain |
 | `gemini-3.8-flash` | Newer Flash, **needs a cookie from a PAID Gemini account** (free accounts get downgraded to 3.5 Flash-Lite). `gemini-3.7-flash` is an alias — Google bumped that same hex from 3.7 to 3.8 in place |
+| `gemini-4-argon` | 4 Argon (complex tasks), **needs a cookie from a PAID/Ultra Gemini account** (free accounts get downgraded to 3.5 Flash-Lite) |
 | `gemini-3.6-flash-thinking` | 3.6 Flash with extended thinking; **needs a cookie** |
 | `gemini-3.5-flash-lite-thinking` | 3.5 Flash-Lite with extended thinking; **needs a cookie** |
 | `gemini-3.1-pro-thinking` | 3.1 Pro with extended thinking; **needs a cookie** |
 | `gemini-3.8-flash-thinking` | 3.8 Flash with extended thinking; **needs a paid-account cookie** (`gemini-3.7-flash-thinking` is an alias) |
+| `gemini-4-argon-thinking` | 4 Argon with extended thinking (upstream "High" tier), carries `reasoning_content`; **needs a PAID/Ultra account cookie** |
 | `gemini-image` | Image generation (Nano Banana); base64 output; **needs a cookie** |
 | `gemini-music` | Music (Lyria, ~30s); base64 output; **needs a cookie** |
 | `gemini-canvas` | Canvas: generates an interactive HTML document (returned inline as a ```html block); **needs a cookie** |
@@ -598,8 +600,8 @@ spread requests across exits with the proxy pool rather than adding accounts.
 Anonymous (no cookie): `gemini-3.6-flash` and `gemini-3.5-flash-lite`, web search included.
 A free account's cookie additionally unlocks `gemini-3.1-pro`, the `-thinking` variants of all three models,
 image / video input, image generation, music and canvas.
-Paid accounts only: `gemini-3.8-flash` (free accounts are downgraded to 3.5 Flash-Lite) and video generation
-(`gemini-video` / `/v1/videos`).
+Paid accounts only: `gemini-3.8-flash`, `gemini-4-argon` (and their `-thinking` variants; free accounts are
+downgraded to 3.5 Flash-Lite) and video generation (`gemini-video` / `/v1/videos`).
 
 ### Why does every message create a new conversation on gemini.google.com?
 

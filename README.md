@@ -244,10 +244,12 @@ Gemini 网页端服务端只认三个模型（清单来自 `batchexecute?rpcids=
 | `gemini-3.5-flash-lite` | 极速、轻量 |
 | `gemini-3.1-pro` | 最强，**要配 cookie**；每次回答都带思考链 |
 | `gemini-3.8-flash` | 新款 Flash，**要付费 Gemini 账号的 cookie**（免费号降级成 3.5 Flash-Lite）。`gemini-3.7-flash` 是它的别名——Google 把 3.7 那个 hex 原地升成了 3.8 |
+| `gemini-4-argon` | 4 Argon（复杂任务），**要付费/Ultra Gemini 账号的 cookie**（免费号降级成 3.5 Flash-Lite）|
 | `gemini-3.6-flash-thinking` | 3.6 Flash 开扩展思考，**要配 cookie** |
 | `gemini-3.5-flash-lite-thinking` | 3.5 Flash-Lite 开扩展思考，**要配 cookie** |
 | `gemini-3.1-pro-thinking` | 3.1 Pro 开扩展思考，**要配 cookie** |
 | `gemini-3.8-flash-thinking` | 3.8 Flash 开扩展思考，**要付费号 cookie**（`gemini-3.7-flash-thinking` 为别名）|
+| `gemini-4-argon-thinking` | 4 Argon 开扩展思考（上游叫 High 档），带 `reasoning_content`，**要付费/Ultra 号 cookie** |
 | `gemini-image` | 生图（Nano Banana），产物 base64，**要配 cookie** |
 | `gemini-music` | 音乐（Lyria，约 30 秒），产物 base64，**要配 cookie** |
 | `gemini-canvas` | 画布，生成交互 HTML 文档（内联返回 ```html 块），**要配 cookie** |
@@ -662,7 +664,7 @@ Docker 用默认 bridge 网络时上游可能返回空内容（Google 拒绝某�
 
 匿名（不挂 cookie）：`gemini-3.6-flash`、`gemini-3.5-flash-lite`，含联网搜索。
 挂免费账号 cookie：额外解锁 `gemini-3.1-pro`、三个模型的思考版（`-thinking`）、读图 / 读视频、生图、音乐、画布。
-付费账号才有：`gemini-3.8-flash`（免费号会被降级成 3.5 Flash-Lite）和生视频（`gemini-video` / `/v1/videos`）。
+付费账号才有：`gemini-3.8-flash`、`gemini-4-argon`（及其 `-thinking`，免费号都会被降级成 3.5 Flash-Lite）和生视频（`gemini-video` / `/v1/videos`）。
 
 ### 为什么每发一条消息，gemini.google.com 里就多出一个会话？
 
