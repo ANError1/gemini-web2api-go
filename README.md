@@ -166,6 +166,8 @@ Windows PowerShell 下 `curl` 是 `Invoke-WebRequest` 的别名，会把 JSON �
 curl.exe --% http://127.0.0.1:8083/v1/chat/completions -H "Content-Type: application/json" -H "Authorization: Bearer sk-gemini-..." -d "{\"model\":\"gemini-3.6-flash\",\"messages\":[{\"role\":\"user\",\"content\":\"Hello!\"}]}"
 ```
 
+> 跑通了？顺手点个 ⭐。GitHub 的 topic 页按 star 排，这是别人找到这个项目的主要入口。有问题或想法开 issue；在 fork 里改好的功能，欢迎提 PR 回来。
+
 ## 客户端接入
 
 任何 OpenAI 兼容客户端（Cherry Studio / ChatBox / Open WebUI / dify / Cursor / …）都是同一套填法：
