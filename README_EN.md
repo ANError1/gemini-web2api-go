@@ -625,6 +625,17 @@ the proxy. Function calling is prompt-level, so the model does not always answer
 Yes: `gemini-3.8-flash` and `gemini-3.8-flash-thinking`, for paid Gemini accounts; requests from free accounts are
 downgraded server-side to 3.5 Flash-Lite. `gemini-3.7-flash` remains as an alias so older clients keep working.
 
+### Can I use Gemini 4 Argon through this? How?
+
+Yes, and without a Gemini API key. The model is `gemini-4-argon`; `gemini-4-argon-thinking` is the upstream "High"
+thinking tier and carries `reasoning_content`; the Medium tier is `gemini-4-argon-thinking-medium` (see the model table).
+There is one requirement: the account behind the cookie must show "4 Argon" in the model picker on gemini.google.com.
+If it does, the account is eligible (Google AI Pro / Ultra tier; a Pro plan that came bundled or through a student offer
+counts), so add its cookie in the admin dashboard and request `gemini-4-argon`.
+Requests from a free account, or from one without Argon, are **silently downgraded to 3.5 Flash-Lite** upstream with no
+error, which is why the model is not exposed when no cookie is configured and never runs anonymously. If you have a cookie
+and still get downgraded, check the web app first for "4 Argon" on that account.
+
 ### Which model does image generation use? Can it output 2K?
 
 `gemini-image` uses the web app's image-generation tool slot rather than a pinned model: whatever backend the web
