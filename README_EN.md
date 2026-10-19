@@ -253,6 +253,7 @@ Gemini's backend only recognises three models (the list comes from `batchexecute
 | `gemini-3.1-pro-thinking` | 3.1 Pro with extended thinking; **needs a cookie** |
 | `gemini-3.8-flash-thinking` | 3.8 Flash with extended thinking; **needs a paid-account cookie** (`gemini-3.7-flash-thinking` is an alias) |
 | `gemini-4-argon-thinking` | 4 Argon with extended thinking (upstream "High" tier), carries `reasoning_content`; **needs a PAID/Ultra account cookie** |
+| `gemini-4-argon-thinking-medium` | 4 Argon at the Medium thinking tier (thinks server-side, no `reasoning_content`); **needs a PAID/Ultra account cookie** |
 | `gemini-image` | Image generation (Nano Banana); base64 output; **needs a cookie** |
 | `gemini-music` | Music (Lyria, ~30s); base64 output; **needs a cookie** |
 | `gemini-canvas` | Canvas: generates an interactive HTML document (returned inline as a ```html block); **needs a cookie** |

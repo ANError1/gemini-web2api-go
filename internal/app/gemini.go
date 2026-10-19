@@ -50,6 +50,11 @@ const innerSlots = 97
 const (
 	thinkingNormal   = 1
 	thinkingExtended = 2
+	// thinkingMedium 是 4 Argon 网页 UI「中等」思考档的线值（低=1 / 高=2 / 中=4）。
+	// 判据：2026-10-19 的 processSession 抓包里选中档时 think 槽（新协议字段 #81 =
+	// 老 inner[80]）发的就是 4；与 #37 自述一致。中档的思考在服务端内部完成、响应
+	// 不吐思考链，所以不映射 reasoning_content。
+	thinkingMedium = 4
 )
 
 // ModelConfig holds the server-side model id plus the legacy MODE_CATEGORY value.
@@ -63,11 +68,26 @@ type ModelConfig struct {
 	// Thinking 为真时填 inner[80]=2，即网页 UI 上的「扩展思考」。跟 HexID 正交
 	// —— 三个模型都能开，不是某个专属模型。
 	Thinking bool
+	// ThinkWire >0 时直接作为思考档线值（header 下标15 / inner[80]），覆盖 Thinking
+	// 推出的 1/2。用于 4 Argon「中等」档（=thinkingMedium=4）。两者都不设 = 普通(1)。
+	ThinkWire int
 	// Tool 非 0 时填 inner[49]，让服务端换后端模型生成媒体产物（14=生图 Nano Banana
 	// / 21=音乐 Lyria）。产物不在 StreamGenerate 响应里，要再走 hNvQHb 拿下载链、
 	// 用下载 host 认的 cookie 子集下回原始字节，见 media.go。跟登录态绑定：匿名请求
 	// 这个会被静默降级成一句「Are you signed in?」文本。
 	Tool int
+}
+
+// thinkWire 返回思考档线值（填 header 下标15 / inner[80]）：ThinkWire 显式指定优先，
+// 否则 Thinking→扩展(2)、默认普通(1)。对现有模型取值跟旧的 normal/extended 逐字一致。
+func (mc ModelConfig) thinkWire() int {
+	if mc.ThinkWire > 0 {
+		return mc.ThinkWire
+	}
+	if mc.Thinking {
+		return thinkingExtended
+	}
+	return thinkingNormal
 }
 
 // 只暴露服务端清单（batchexecute?rpcids=otAQ7b）里真实存在的模型。
@@ -98,6 +118,9 @@ var Models = map[string]ModelConfig{
 	// 实测回报 "4 Argon High" 且带思考链（硬题 985 字符，走既有 [4][0][37][0][0] 路径，
 	// 无需改抽取代码）→ 映射成 reasoning_content。付费/Ultra 专属。
 	"gemini-4-argon-thinking": {HexID: hexArgon4, Mode: 8, Thinking: true, Desc: "4 Argon with extended thinking (High reasoning tier); emits reasoning_content; needs a signed-in PAID/Ultra account"},
+	// 中档：think 线值 4（高档是 2）。中档思考在服务端内部完成、不吐思考链，所以不设
+	// Thinking（不期望 reasoning_content），登录门控靠 hexArgon4 + thinkWire。
+	"gemini-4-argon-thinking-medium": {HexID: hexArgon4, Mode: 8, ThinkWire: thinkingMedium, Desc: "4 Argon at the Medium thinking tier (thinks server-side, no reasoning_content); needs a signed-in PAID/Ultra account"},
 
 	// 媒体生成。inner[49] 一填，服务端换后端模型出图/出乐；产物走 hNvQHb + 下载 host
 	// 取回，以 base64 data URL 塞进 content 返回。都要登录态，没 cookie 时不暴露。
@@ -123,7 +146,7 @@ func hasCookie() bool {
 // 逐模型核对等价：那三个正名的 HexID 就是 hexPro31 / hexFlash38，其余登录模型都被
 // Thinking 或 Tool 覆盖。
 func modelNeedsLogin(mc ModelConfig) bool {
-	return mc.HexID == hexPro31 || mc.HexID == hexFlash38 || mc.HexID == hexArgon4 || mc.Thinking || mc.Tool > 0
+	return mc.HexID == hexPro31 || mc.HexID == hexFlash38 || mc.HexID == hexArgon4 || mc.Thinking || mc.ThinkWire > 0 || mc.Tool > 0
 }
 
 // anonFirstEligible 判断「匿名优先」开关下这次请求能不能走匿名（不占 cookie 账号）：
@@ -539,11 +562,11 @@ func streamGenerateWithFiles(prompt, latest string, mc ModelConfig, pending []pe
 	inner[61] = []interface{}{}
 	inner[68] = 1
 	inner[79] = mc.Mode
-	inner[80] = thinkingNormal
+	tw := mc.thinkWire()
+	inner[80] = tw
 	inner[91] = 0
 	inner[96] = 0
-	if mc.Thinking {
-		inner[80] = thinkingExtended
+	if tw != thinkingNormal {
 		inner[96] = 1
 	}
 	// 媒体工具开关。填了服务端就换后端模型出图/出乐（响应里带产物引用，字节要另取）。
@@ -578,12 +601,8 @@ func streamGenerateWithFiles(prompt, latest string, mc ModelConfig, pending []pe
 
 	body := buildBody(xsrfToken)
 
-	thinkVal := thinkingNormal
-	if mc.Thinking {
-		thinkVal = thinkingExtended
-	}
 	// 抓包里 header 下标 16 和 inner[59] 是两个不同的 uuid，各生成各的。
-	modelHeader := buildModelHeader(mc.HexID, mc.Mode, thinkVal, uuid.NewString())
+	modelHeader := buildModelHeader(mc.HexID, mc.Mode, mc.thinkWire(), uuid.NewString())
 	sessionHeader := fmt.Sprintf(`["%s",1]`, reqUUID)
 
 	geminiHeaders := buildGeminiHeaders(cookieStr, sapisid, mc.HexID)
