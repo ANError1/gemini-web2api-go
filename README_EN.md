@@ -173,6 +173,8 @@ On Windows PowerShell, `curl` is an alias for `Invoke-WebRequest` and will reint
 curl.exe --% http://127.0.0.1:8083/v1/chat/completions -H "Content-Type: application/json" -H "Authorization: Bearer sk-gemini-..." -d "{\"model\":\"gemini-3.6-flash\",\"messages\":[{\"role\":\"user\",\"content\":\"Hello!\"}]}"
 ```
 
+> Got it running? A ⭐ helps: GitHub topic pages rank by stars, and that is how most people find this project. Issues and ideas are welcome, and if you have improved something in a fork, send it back as a PR.
+
 ## Connecting clients
 
 Every OpenAI-compatible client (Cherry Studio / ChatBox / Open WebUI / dify / Cursor / …) is configured the same way:
