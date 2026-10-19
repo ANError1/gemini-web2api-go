@@ -684,6 +684,15 @@ Function calling 是 prompt 级实现，模型不一定每次都按格式返回�
 有（`gemini-3.8-flash` 与 `gemini-3.8-flash-thinking`），需要付费 Gemini 账号；免费号请求它会被服务端降级成 3.5 Flash-Lite。
 `gemini-3.7-flash` 作为别名保留，老客户端不受影响。
 
+### 能用 Gemini 4 Argon 吗？怎么用？
+
+能，不需要 Gemini API key。模型名 `gemini-4-argon`；`gemini-4-argon-thinking` 是上游的 High 思考档，回复带 `reasoning_content`；
+中档是 `gemini-4-argon-thinking-medium`（见模型表）。
+条件只有一个：挂进来的 cookie 所属账号在 gemini.google.com 的模型选择器里能看到「4 Argon」。看得到就是有权限
+（Google AI Pro / Ultra 档，捆绑或学生优惠拿到的 Pro 一样算），把它的 cookie 配进管理面板、请求 `gemini-4-argon` 即可。
+免费号或没开 Argon 的号发它，上游会**静默降级成 3.5 Flash-Lite**、不报错，所以本项目没配 cookie 时不暴露这个模型，也不走匿名。
+配了 cookie 仍被降级，先去网页端确认该账号有没有「4 Argon」。
+
 ### 生图用的是哪个模型？能出 2K 吗？
 
 `gemini-image` 走的是网页端的生图工具位，不锁模型：网页端当前用什么生图后端（如 Nano Banana 2），这里就自动跟着。
