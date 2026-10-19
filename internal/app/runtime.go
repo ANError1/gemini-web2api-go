@@ -59,6 +59,10 @@ type RuntimeConfig struct {
 	// 取代 auto_delete_conversation（省掉删除 RPC）。只登录态有意义，与 multi_turn 冲突
 	// （multi_turn 开着时不发）。默认 false，见 temporaryChatEligible。
 	TemporaryChat bool `json:"temporary_chat"`
+	// FirefoxFingerprint 实验开关（#40 之上）：开 → 强制 Firefox/Zen 指纹（TLS Firefox_147 +
+	// Firefox UA + 去 Sec-CH-UA）；关 → 用 Impersonate（默认 Chrome）。直连才是完整 Firefox
+	// 指纹，走代理时 TLS 仍是 Go 标准库的。默认 false。见 isFirefoxProfile / effectiveImpersonate。
+	FirefoxFingerprint bool `json:"firefox_fingerprint"`
 }
 
 const runtimeConfigKey = "runtime_config"
@@ -94,6 +98,7 @@ func initRuntimeConfig() {
 		AutoDeleteConversation: cfg.AutoDeleteConversation,
 		AnonFirst:              cfg.AnonFirst,
 		TemporaryChat:          cfg.TemporaryChat,
+		FirefoxFingerprint:     cfg.FirefoxFingerprint,
 	}
 	if raw := kvGet(runtimeConfigKey); raw != "" {
 		saved := base

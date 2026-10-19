@@ -944,6 +944,8 @@ const RT_GROUPS = [
         hint: '超了直接返回 400 context_length_exceeded。上游的墙实测在约 13 万 UTF-8 字节，按字节算跟语言无关（同字节数下中英文表现一致，而 token 数差 1.9 倍）。不拦的话上游从尾部静默截断，被吃掉的正是刚问的那句。0=不限' },
       { k: 'impersonate', label: 'TLS 指纹', type: 'text',
         hint: 'chrome_146 / chrome_144 / firefox_147 / safari_16_0 …' },
+      { k: 'firefox_fingerprint', label: 'Firefox 指纹（实验）', type: 'bool',
+        hint: '开：请求伪装成 Firefox/Zen——直连时 TLS 握手走 Firefox 指纹、UA 换成 Firefox、去掉 Chrome 专有的 Sec-CH-UA；关：用上面「TLS 指纹」的设置（默认 Chrome）。cookie 从 Firefox 导出时建议配套打开。注意：走代理时 TLS 这层是 Go 标准库的、改不成 Firefox（隧道限制），只有 header 变成 Firefox，仅直连才是完整 Firefox 指纹。实验功能，默认关' },
       { k: 'gemini_bl', label: 'Gemini bl 版本', type: 'text',
         hint: '上游前端版本号。请求大面积失败时先看这里是不是过期了' },
       { k: 'gemini_bl_auto', label: '自动跟随 bl 版本', type: 'bool',
@@ -2070,6 +2072,9 @@ const I18N_EN = {
   '匿名优先': 'Anonymous first',
   '这次请求不需要登录态能力时（纯文本、非思考、无工具、不带图）走匿名、不占用 cookie 账号，省账号额度；用到 3.1 Pro / 3.8 Flash / 扩展思考 / 生图 / 传文件这些才挑号。关掉则只要池里有号就一律用号（默认关）':
     'Routes requests that do not require account capabilities (plain text, non-thinking, no tools, no images) anonymously to save cookie account quota. Picks an account only when using 3.1 Pro, 3.8 Flash, extended thinking, image gen, or file uploads. When off, always uses an account if any are in the pool (default off)',
+  'Firefox 指纹（实验）': 'Firefox fingerprint (experimental)',
+  '开：请求伪装成 Firefox/Zen——直连时 TLS 握手走 Firefox 指纹、UA 换成 Firefox、去掉 Chrome 专有的 Sec-CH-UA；关：用上面「TLS 指纹」的设置（默认 Chrome）。cookie 从 Firefox 导出时建议配套打开。注意：走代理时 TLS 这层是 Go 标准库的、改不成 Firefox（隧道限制），只有 header 变成 Firefox，仅直连才是完整 Firefox 指纹。实验功能，默认关':
+    'On: requests impersonate Firefox/Zen — on a direct connection the TLS handshake uses the Firefox profile, the UA becomes Firefox, and the Chromium-only Sec-CH-UA headers are dropped. Off: uses the "TLS fingerprint" field above (Chrome by default). Recommended when cookies are exported from Firefox. Note: over a proxy the TLS layer is still Go stdlib (tunnel limitation) — only headers become Firefox; a full Firefox fingerprint happens only on direct connections. Experimental, off by default.',
   '主会话': 'Main session',
   '算授权头用，缺了会被当匿名': 'Used for authorization header; treated as anonymous if missing',
   '待检测': 'Pending',

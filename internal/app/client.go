@@ -51,12 +51,14 @@ func resolveProfile(name string) profiles.ClientProfile {
 	}
 }
 
-// getTLSClient returns a tls-client (Chrome 146 fingerprint) for direct connections only.
+// getTLSClient returns a tls-client for direct connections only; its fingerprint follows
+// effectiveImpersonate() (default Chrome 146, Firefox_147 when the firefox toggle is on).
 // For proxied connections we use stdlib (see getStdlibClient) — tls-client's SOCKS5
 // implementation is fragile compared to net/http.
 func getTLSClient() tls_client.HttpClient {
+	imp := effectiveImpersonate()
 	clientCacheMu.RLock()
-	if c, ok := clientCache[rtCfg().Impersonate]; ok {
+	if c, ok := clientCache[imp]; ok {
 		clientCacheMu.RUnlock()
 		return c
 	}
@@ -64,12 +66,12 @@ func getTLSClient() tls_client.HttpClient {
 
 	clientCacheMu.Lock()
 	defer clientCacheMu.Unlock()
-	if c, ok := clientCache[rtCfg().Impersonate]; ok {
+	if c, ok := clientCache[imp]; ok {
 		return c
 	}
 	opts := []tls_client.HttpClientOption{
 		tls_client.WithTimeoutSeconds(rtCfg().RequestTimeout),
-		tls_client.WithClientProfile(resolveProfile(rtCfg().Impersonate)),
+		tls_client.WithClientProfile(resolveProfile(imp)),
 		tls_client.WithNotFollowRedirects(),
 	}
 	client, err := tls_client.NewHttpClient(tls_client.NewNoopLogger(), opts...)
@@ -77,7 +79,7 @@ func getTLSClient() tls_client.HttpClient {
 		fmt.Fprintf(os.Stderr, "[client] tls-client init failed: %v\n", err)
 		os.Exit(1)
 	}
-	clientCache[rtCfg().Impersonate] = client
+	clientCache[imp] = client
 	return client
 }
 
@@ -157,12 +159,31 @@ func makeSAPISIDHash(sapisid string) string {
 // ChromeUA 是给 stdlib 走代理时用的 Chrome 146 真实 UA 模板。
 const ChromeUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36"
 
-// FirefoxUA 是给 stdlib / tls-client 走 Firefox/Zen 指纹时的 UA 模板（对齐 Linux x86_64 Zen/Firefox Gecko 157）。
-const FirefoxUA = "Mozilla/5.0 (X11; Linux x86_64; rv:157.0) Gecko/20100101 Firefox/157.0"
+// FirefoxUA 是走 Firefox/Zen 指纹时的 UA 模板。版本号对齐底层 TLS profile（tls-client 的
+// Firefox_147），不报更高的 157——UA 报的大版本跟 TLS 握手指纹对不上反而更可疑。
+const FirefoxUA = "Mozilla/5.0 (X11; Linux x86_64; rv:147.0) Gecko/20100101 Firefox/147.0"
 
+// isFirefoxProfile 判断这次该不该走 Firefox 指纹。两个来源，任一成立即是：
+//  1. firefox_fingerprint 实验开关打开（设置页里显式 opt-in，见 config.go）；
+//  2. impersonate 字符串本身就填成了 firefox*/zen（老用法，向后兼容）。
+//
+// TLS profile（getTLSClient→effectiveImpersonate）和应用层 header（applyBrowserHeaders）
+// 认的是同一个判据，两层不会错位成「Firefox UA + Chrome 握手」。
 func isFirefoxProfile() bool {
+	if rtCfg().FirefoxFingerprint {
+		return true
+	}
 	p := strings.ToLower(rtCfg().Impersonate)
 	return strings.HasPrefix(p, "firefox") || p == "zen"
+}
+
+// effectiveImpersonate 是真正拿去 resolveProfile 的指纹名。开着 Firefox 实验开关时强制
+// firefox_147（跟 FirefoxUA 的大版本对齐），否则用用户配的 impersonate（默认 chrome_146）。
+func effectiveImpersonate() string {
+	if rtCfg().FirefoxFingerprint {
+		return "firefox_147"
+	}
+	return rtCfg().Impersonate
 }
 
 func currentBrowserUA() string {
