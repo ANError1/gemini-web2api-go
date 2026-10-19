@@ -657,6 +657,12 @@ Yes. Set `SQL_DSN` (`mysql://user:pass@host:3306/db` or `postgres://user:pass@ho
 unset means SQLite. Tables are created automatically and all three share one schema. SQLite is the easy choice for a
 single instance; MySQL / PostgreSQL only matter when several instances share one pool.
 
+## Star History
+
+If you read this far, it probably solves something for you. A ⭐ helps others find it; open an issue when something breaks, and send a PR when you have fixed it.
+
+[![Star History Chart](https://api.star-history.com/svg?repos=zexadev/gemini-web2api-go&type=Date)](https://star-history.com/#zexadev/gemini-web2api-go&Date)
+
 ## Acknowledgments
 
 - [bogdanfinn/tls-client](https://github.com/bogdanfinn/tls-client) — real Chrome TLS fingerprints
