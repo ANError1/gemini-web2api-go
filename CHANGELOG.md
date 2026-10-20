@@ -2,6 +2,28 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## 4.23.0
+
+### 新增
+
+- **`gemini-4-argon-thinking-medium`——4 Argon 中档思考（延续 #35）**。思考档从 bool 扩成可显式
+  指定线值（低=1 / 高=2 / 中=4，`ModelConfig.ThinkWire`）。中档在服务端内部完成、响应不带思考链，
+  故不映射 `reasoning_content`；登录门控同 Argon（付费 / Ultra 号 cookie）。
+  - 判据：2026-10-19 processSession 抓包里选中档时 think 槽（新协议字段 #81 = 老 `inner[80]`）发的
+    就是 4；现有模型取值逐字不变（argon=1 / argon-thinking=2 / flash=1、2），`buildModelHeader` 输出逐个核对。
+
+- **浏览器指纹实验开关 `firefox_fingerprint`（PR #40 之上）**。开 → 强制 Firefox/Zen 指纹（TLS profile
+  Firefox_147 + Firefox UA + 去掉 Chromium 专有的 `Sec-CH-UA`）；关 → 用 `impersonate`（默认 Chrome）。
+  直连才是完整 Firefox 指纹，走代理时 TLS 这层仍是 Go 标准库的（HTTP CONNECT 隧道限制）。面板「设置」
+  可开关，默认关。合入 #40 的应用层 header / UA 对齐。
+
+- **管理面板英文 i18n（PR #38）**。面板页面、弹窗、后端错误信息补齐英文。
+
+### 文档
+
+- README / README_EN 加目录（首屏二级标题锚点跳转）、「能用 Gemini 4 Argon 吗？怎么用？」FAQ、首屏
+  定义句补 4 Argon、快速开始末尾 star 引导、文末 Star History。
+
 ## 4.22.0
 
 ### 新增
