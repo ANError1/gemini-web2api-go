@@ -17,6 +17,30 @@ Turn the Google Gemini web app into an OpenAI-compatible API. **Single binary**,
 
 ---
 
+## Contents
+
+- [What this is](#what-this-is)
+- [Features](#features)
+- [Quick start](#quick-start)
+- [Connecting clients](#connecting-clients)
+- [MCP (web_search tool)](#mcp-web_search-tool)
+- [Admin panel](#admin-panel)
+- [Models](#models)
+- [Configuration](#configuration)
+- [Cookie (optional)](#cookie-optional)
+- [Proxy pool (the core of running this for free)](#proxy-pool-the-core-of-running-this-for-free)
+- [Fingerprint simulation](#fingerprint-simulation)
+- [Privacy](#privacy)
+- [OpenAI protocol coverage](#openai-protocol-coverage)
+- [Project layout](#project-layout)
+- [Limitations](#limitations)
+- [Troubleshooting](#troubleshooting)
+- [FAQ](#faq)
+- [Star History](#star-history)
+- [Acknowledgments](#acknowledgments)
+- [License](#license)
+- [Links](#links)
+
 ## What this is
 
 It turns a call like this:
