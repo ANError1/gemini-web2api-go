@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -337,9 +338,15 @@ func streamGenerateConv(prompt string, mc ModelConfig, conv *convState,
 
 	tracker := &deltaTracker{}
 	rtracker := &deltaTracker{}
-	var lineCB func(string)
-	if onDelta != nil || onReasoning != nil {
-		lineCB = func(line string) {
+	strictCheck := strictLineCheck(mc, func() int64 { return conv.accountID })
+	var lineCB func(string) error
+	if onDelta != nil || onReasoning != nil || strictCheck != nil {
+		lineCB = func(line string) error {
+			if strictCheck != nil {
+				if err := strictCheck(line); err != nil {
+					return err
+				}
+			}
 			if onReasoning != nil {
 				if r := reasoningInLine(line); r != "" {
 					if d := rtracker.Push(r); d != "" {
@@ -348,13 +355,14 @@ func streamGenerateConv(prompt string, mc ModelConfig, conv *convState,
 				}
 			}
 			if onDelta == nil {
-				return
+				return nil
 			}
 			for _, t := range textsInLine(line) {
 				if d := tracker.Push(t); d != "" {
 					onDelta(d)
 				}
 			}
+			return nil
 		}
 	}
 
@@ -366,6 +374,12 @@ func streamGenerateConv(prompt string, mc ModelConfig, conv *convState,
 			if merged := mergeSetCookie(conv.cookie, setCookie); merged != conv.cookie {
 				conv.cookie = merged
 			}
+		}
+		// 降级：同一个号重试还是降级，直接交给上层（见 gemini.go 同一处）。
+		var mde *ModelDowngradedError
+		if errors.As(err, &mde) {
+			return &StreamResult{ProxyID: p.ID, ProxyName: p.Name, AccountID: conv.accountID,
+				UpstreamModel: mde.Reported, TotalMs: time.Since(t0).Milliseconds()}, err
 		}
 		if err != nil || statusCode != 200 || !hasContentFrame(string(raw)) {
 			if err == nil && statusCode == 200 {

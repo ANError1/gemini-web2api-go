@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -622,9 +623,15 @@ func streamGenerateWithFiles(prompt, latest string, mc ModelConfig, pending []pe
 
 	tracker := &deltaTracker{}
 	rtracker := &deltaTracker{}
-	var lineCB func(string)
-	if onDelta != nil || onReasoning != nil {
-		lineCB = func(line string) {
+	strictCheck := strictLineCheck(mc, func() int64 { return cookieID })
+	var lineCB func(string) error
+	if onDelta != nil || onReasoning != nil || strictCheck != nil {
+		lineCB = func(line string) error {
+			if strictCheck != nil {
+				if err := strictCheck(line); err != nil {
+					return err
+				}
+			}
 			// 思考链先推完才轮到正文，所以先处理它，客户端拿到的顺序才对。
 			if onReasoning != nil {
 				if r := reasoningInLine(line); r != "" {
@@ -634,13 +641,14 @@ func streamGenerateWithFiles(prompt, latest string, mc ModelConfig, pending []pe
 				}
 			}
 			if onDelta == nil {
-				return
+				return nil
 			}
 			for _, t := range textsInLine(line) {
 				if d := tracker.Push(t); d != "" {
 					onDelta(d)
 				}
 			}
+			return nil
 		}
 	}
 
@@ -651,6 +659,14 @@ func streamGenerateWithFiles(prompt, latest string, mc ModelConfig, pending []pe
 				cookieStr = merged
 				updateAccountCookie(cookieID, merged)
 			}
+		}
+		// 降级不是出口或 cookie 的错，也不该重试：同一个号再发一次还是降级。
+		var mde *ModelDowngradedError
+		if errors.As(err, &mde) {
+			res, _ := attrib(nil)
+			res.UpstreamModel = mde.Reported
+			res.TotalMs = time.Since(t0).Milliseconds()
+			return res, err
 		}
 		if err != nil {
 			lastErr = err
@@ -842,7 +858,7 @@ func buildGeminiHeaders(cookieStr, sapisid, hexID string) map[string]string {
 // __Secure-3PSIDCC，浏览器收下再带回去。一直发旧值的客户端会被判定为过期会话，
 // 实测号活一两小时就失效 —— 所以这些必须收下来并写回账号。
 func doGeminiRequest(endpoint, body string, headers map[string]string, proxyURL string,
-	onLine func(string)) (int, []byte, int64, []string, error) {
+	onLine func(string) error) (int, []byte, int64, []string, error) {
 	sendAt := time.Now()
 	if proxyURL != "" {
 		// 走 stdlib 的 http.ProxyURL，已知能过 socks5/socks5h。
@@ -889,7 +905,8 @@ func doGeminiRequest(endpoint, body string, headers map[string]string, proxyURL 
 }
 
 // readBody 读完整个响应体并原样返回；onLine 非 nil 时每读到一行就回调一次，
-// 让上层能在上游还没写完时就往客户端转发。
+// 让上层能在上游还没写完时就往客户端转发。onLine 返回错误就停止读取、原样返回
+// 这个错误（strict_model 看到降级时用它掐断，不再白等上游把整段生成完）。
 //
 // 始终走逐行扫描（而不是 onLine==nil 时图省事用 io.ReadAll），因为要拿到
 // **第一行到达的时刻**当 TTFB。用 ReadAll 的话读完才返回，测出来的"首字节
@@ -897,7 +914,7 @@ func doGeminiRequest(endpoint, body string, headers map[string]string, proxyURL 
 //
 // start 必须是**请求发出前**的时刻，由调用方传入。放在本函数里取 time.Now()
 // 是不对的：那时 client.Do 已经返回、响应头甚至部分 body 都到了，测出来恒为 0。
-func readBody(r io.Reader, onLine func(string), start time.Time) ([]byte, int64, error) {
+func readBody(r io.Reader, onLine func(string) error, start time.Time) ([]byte, int64, error) {
 	var buf bytes.Buffer
 	sc := bufio.NewScanner(io.TeeReader(r, &buf))
 	// 单帧可能很大（实测见过 40 万字节的响应），默认 64KB 上限不够。
@@ -908,7 +925,9 @@ func readBody(r io.Reader, onLine func(string), start time.Time) ([]byte, int64,
 			ttfb = time.Since(start).Milliseconds()
 		}
 		if onLine != nil {
-			onLine(sc.Text())
+			if err := onLine(sc.Text()); err != nil {
+				return buf.Bytes(), ttfb, err
+			}
 		}
 	}
 	if ttfb < 0 {
