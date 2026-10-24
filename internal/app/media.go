@@ -165,6 +165,22 @@ const errVideoQuota = "video_quota_exhausted"
 // 程序里判断一律 errors.Is，不比文案，改措辞不会让换号悄悄失效。
 var errVideoQuotaUsed = errors.New(errVideoQuota + ": this account's video generation limit is used up (resets later); resubmit to use another account")
 
+// videoQuotaError 是带重置时间的 errVideoQuotaUsed（errors.Is 认得它）。ResetAt 取自
+// 拒绝那一轮里 Google 自己写的时间戳（unix 秒），那一轮没写时为 0。
+type videoQuotaError struct{ ResetAt int64 }
+
+func (e *videoQuotaError) Error() string        { return errVideoQuotaUsed.Error() }
+func (e *videoQuotaError) Is(target error) bool { return target == errVideoQuotaUsed }
+
+// videoQuotaReset 取额度错误里的重置时间，取不到返回 0。
+func videoQuotaReset(err error) int64 {
+	var qe *videoQuotaError
+	if errors.As(err, &qe) {
+		return qe.ResetAt
+	}
+	return 0
+}
+
 // errVideoRefused prefixes the error when Gemini answers with text instead of
 // starting a video (a refusal); resubmitting the same prompt won't help.
 const errVideoRefused = "video_refused"
@@ -356,7 +372,14 @@ func fetchDownloadArtifacts(cid, rid, cookie, sapisid, xsrf, proxyURL, defaultMi
 			// quota" status. Nothing will ever arrive, so fail fast instead of polling ~6 min.
 			// Nothing was consumed; the caller can resubmit (LRU picks another account).
 			if strings.Contains(body, "out of video generation quota") || strings.Contains(body, "as soon as your limit resets") {
-				return nil, rcid, errVideoQuotaUsed
+				// 重置时间就在这一轮里（classifyVideoTurns 的 ResetAt），不用另读历史。
+				var reset int64
+				for _, ev := range classifyVideoTurns(body) {
+					if ev.Kind == "quota_refused" && ev.ResetAt > reset {
+						reset = ev.ResetAt
+					}
+				}
+				return nil, rcid, &videoQuotaError{ResetAt: reset}
 			}
 		}
 		time.Sleep(interval)

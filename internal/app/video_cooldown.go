@@ -7,10 +7,8 @@ package app
 // Retry-After, and a running job fails with the same code and the earliest reset, so
 // the client can wait instead of resubmitting into a pool that cannot make videos.
 //
-// The cooldown starts at videoCooldownDefault and is then corrected in the background
-// to the account's real reset time, read from its Gemini history (videoQuotaFor:
-// Google's own timestamp on the refusal, or first video in the window + 5 h). It lives
-// in memory: after a restart each exhausted account costs one fast refusal to relearn.
+// 冷却到 Google 写在拒绝那一轮里的重置时间（videoQuotaError.ResetAt）；那一轮没写时
+// 按 videoCooldownDefault。只放内存：重启后每个用完的号再被拒一次（不耗额度）就记回来。
 
 import (
 	"fmt"
@@ -27,38 +25,23 @@ const (
 var (
 	videoCooldownMu sync.Mutex
 	videoCooldown   = map[int64]int64{} // account id → unix time its video budget resets
-	// Learns the real reset time of an exhausted account; replaced in tests.
-	videoResetLookup = func(id int64) int64 {
-		a := accountByID(id)
-		if a == nil {
-			return 0
-		}
-		return videoQuotaFor(*a, time.Now(), 8*time.Hour).ResetAt
-	}
 )
 
-// markVideoExhausted puts an account in its cooldown and refines the end in the background.
-func markVideoExhausted(id int64) {
+// markVideoExhausted 把号放进视频冷却，到 reset（unix 秒）为止。reset 不在
+// (现在, 现在+videoCooldownMax] 里（0 = 拒绝里没写，或时间戳不像重置时间）就按默认时长。
+func markVideoExhausted(id, reset int64) {
 	if id <= 0 {
 		return
 	}
 	now := time.Now()
-	videoCooldownMu.Lock()
-	if videoCooldown[id] <= now.Unix() {
-		videoCooldown[id] = now.Add(videoCooldownDefault).Unix()
+	until := now.Add(videoCooldownDefault).Unix()
+	if reset > now.Unix() && reset <= now.Add(videoCooldownMax).Unix() {
+		until = reset
 	}
+	videoCooldownMu.Lock()
+	videoCooldown[id] = until
 	videoCooldownMu.Unlock()
-	logf("[video] 账号 #%d 视频额度用完，新视频暂时跳过它", id)
-	go func() {
-		reset := videoResetLookup(id)
-		if reset <= time.Now().Unix() || reset > time.Now().Add(videoCooldownMax).Unix() {
-			return
-		}
-		videoCooldownMu.Lock()
-		videoCooldown[id] = reset
-		videoCooldownMu.Unlock()
-		logf("[video] 账号 #%d 视频额度 %s 重置", id, time.Unix(reset, 0).Format("15:04"))
-	}()
+	logf("[video] 账号 #%d 视频额度用完，%s 前新视频跳过它", id, time.Unix(until, 0).Format("15:04"))
 }
 
 // videoCoolingAccounts returns the accounts still in their cooldown (expired ones are dropped).

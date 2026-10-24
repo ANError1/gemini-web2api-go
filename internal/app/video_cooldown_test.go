@@ -11,8 +11,8 @@ import (
 	"time"
 )
 
-// withVideoAccounts adds n signed-in test accounts, stubs the video call and the reset
-// lookup, and clears the cooldowns, all undone after the test.
+// withVideoAccounts adds n signed-in test accounts, stubs the video call and clears the
+// cooldowns, all undone after the test.
 func withVideoAccounts(t *testing.T, n int, call func(mc ModelConfig) (*StreamResult, error)) []int64 {
 	t.Helper()
 	var ids []int64
@@ -23,17 +23,16 @@ func withVideoAccounts(t *testing.T, n int, call func(mc ModelConfig) (*StreamRe
 		}
 		ids = append(ids, id)
 	}
-	prevCall, prevLookup := videoCall, videoResetLookup
+	prevCall := videoCall
 	videoCall = func(_, _ string, mc ModelConfig, _ []map[string]interface{}, _ []pendingUpload, _, _ func(string)) (string, []ToolCall, *StreamResult, error) {
 		res, err := call(mc)
 		return "", nil, res, err
 	}
-	videoResetLookup = func(int64) int64 { return 0 }
 	videoCooldownMu.Lock()
 	videoCooldown = map[int64]int64{}
 	videoCooldownMu.Unlock()
 	t.Cleanup(func() {
-		videoCall, videoResetLookup = prevCall, prevLookup
+		videoCall = prevCall
 		videoCooldownMu.Lock()
 		videoCooldown = map[int64]int64{}
 		videoCooldownMu.Unlock()
@@ -109,22 +108,19 @@ func TestVideoPoolExhausted(t *testing.T) {
 	}
 }
 
-// Cooldowns end on their own, and a learned reset time replaces the default.
+// Cooldowns end on their own; the reset time carried by the refusal replaces the default,
+// and one outside the plausible range is ignored.
 func TestVideoCooldownExpiresAndLearnsReset(t *testing.T) {
 	ids := withVideoAccounts(t, 1, func(ModelConfig) (*StreamResult, error) { return nil, nil })
-	reset := time.Now().Add(3 * time.Hour).Unix()
-	videoResetLookup = func(int64) int64 { return reset }
-	markVideoExhausted(ids[0])
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		videoCooldownMu.Lock()
-		got := videoCooldown[ids[0]]
-		videoCooldownMu.Unlock()
-		if got == reset {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
+	markVideoExhausted(ids[0], time.Now().Add(48*time.Hour).Unix())
+	if exhausted, at := videoPoolExhausted(); !exhausted || at > time.Now().Add(videoCooldownDefault).Unix() {
+		t.Fatalf("implausible reset should fall back to the default: exhausted=%v at=%d", exhausted, at)
 	}
+	if !errors.Is(fmt.Errorf("wrapped: %w", &videoQuotaError{}), errVideoQuotaUsed) {
+		t.Fatal("videoQuotaError must match errVideoQuotaUsed")
+	}
+	reset := time.Now().Add(3 * time.Hour).Unix()
+	markVideoExhausted(ids[0], videoQuotaReset(fmt.Errorf("wrapped: %w", &videoQuotaError{ResetAt: reset})))
 	if exhausted, at := videoPoolExhausted(); !exhausted || at != reset {
 		t.Fatalf("learned reset: exhausted=%v at=%d want %d", exhausted, at, reset)
 	}

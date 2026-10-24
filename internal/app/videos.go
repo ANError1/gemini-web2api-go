@@ -230,7 +230,7 @@ func runVideoJobWith(j *videoJob, images []pendingUpload, pin int64, cont *ConvR
 		mc.PinAccountID = pin
 		_, _, res, err = videoCall(j.Prompt, j.Prompt, mc, nil, images, nil, nil)
 		if errors.Is(err, errVideoQuotaUsed) {
-			markVideoExhausted(pin)
+			markVideoExhausted(pin, videoQuotaReset(err))
 		}
 	} else {
 		res, err = callOnVideoAccount(j, mc, images)
@@ -283,7 +283,7 @@ func callOnVideoAccount(j *videoJob, mc ModelConfig, images []pendingUpload) (*S
 			return res, nil
 		}
 		if errors.Is(err, errVideoQuotaUsed) {
-			markVideoExhausted(acct.ID)
+			markVideoExhausted(acct.ID, videoQuotaReset(err))
 			logf("[video] %s: 账号 #%d 额度用完，换下一个账号", j.ID, acct.ID)
 			continue
 		}
