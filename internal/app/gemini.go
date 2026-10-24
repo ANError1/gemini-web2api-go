@@ -84,6 +84,19 @@ type ModelConfig struct {
 	Upstream string
 	// VideoAspect is the inner[55] aspect code for video: 16 = 16:9 (default), 17 = 9:16.
 	VideoAspect int
+	// PinAccountID forces the request onto one cookie-pool account (no fallback to
+	// others). Required to continue a conversation, which lives in that account.
+	PinAccountID int64
+	// Cont, when set, sends this request as the next turn of an existing Gemini
+	// conversation (used for video extension: "reply to the video").
+	Cont *ConvRef
+}
+
+// ConvRef identifies the turn to continue: conversation id, the previous turn's
+// response id and response-candidate id, and that turn's index (first turn = 0).
+type ConvRef struct {
+	CID, RID, RCID string
+	Turn           int
 }
 
 // thinkWire 返回思考档线值（填 header 下标15 / inner[80]）：ThinkWire 显式指定优先，
@@ -245,8 +258,10 @@ type StreamResult struct {
 	// 排查"加了 cookie 就大面积失败"时，最需要知道的正是失败那条用的哪个号。
 	AccountID    int64
 	AccountLabel string
-	TTFBMs       int64
-	TotalMs      int64
+	// Conversation ids of this turn (cid, rid, rcid), so a caller can continue it.
+	ConvCID, ConvRID, ConvRCID string
+	TTFBMs                     int64
+	TotalMs                    int64
 	// Artifacts 是媒体模型（生图/音乐）取回的产物原始字节，非媒体模型为空。
 	Artifacts []MediaArtifact
 	// MediaErr 记媒体产物取回失败的原因：生成本身 200 了、但走 hNvQHb / 下载那步挂了。
@@ -396,7 +411,13 @@ func streamGenerateOnce(prompt, latest string, mc ModelConfig, pending []pending
 	// 带附件（图/视频）时不能走匿名——下面 uploadBytes 那段会因 cookieStr=="" 直接报错。
 	var acct *CookieAccount
 	skip := exclude
-	if !anonFirstEligible(mc, len(pending) > 0) {
+	if mc.PinAccountID > 0 {
+		a := accountByID(mc.PinAccountID)
+		if a == nil || a.Status != "enabled" {
+			return &StreamResult{}, fmt.Errorf("account #%d is not available (deleted or disabled)", mc.PinAccountID)
+		}
+		acct = a
+	} else if !anonFirstEligible(mc, len(pending) > 0) {
 		a, s, err := pickAccountForModel(mc, exclude)
 		if err != nil {
 			return &StreamResult{}, err
@@ -495,6 +516,10 @@ func streamGenerateOnce(prompt, latest string, mc ModelConfig, pending []pending
 		markCookieByStatus(acct.ID, 401, err.Error())
 		lastCookieErr = err
 		logf("[cookie] 账号 #%d 不可用，换下一个：%v", acct.ID, err)
+		if mc.PinAccountID > 0 {
+			acct = nil // pinned: never switch to another account mid-conversation
+			continue
+		}
 		next := map[int64]bool{}
 		for id := range skip {
 			next[id] = true
@@ -505,6 +530,9 @@ func streamGenerateOnce(prompt, latest string, mc ModelConfig, pending []pending
 		acct, _ = pickCookieAccountExcept(next) // 取不到时返回 nil，循环自然结束
 	}
 	if lastCookieErr != nil && cookieStr == "" {
+		if mc.PinAccountID > 0 {
+			return attrib(fmt.Errorf("pinned account #%d is not signed in: %w", mc.PinAccountID, lastCookieErr))
+		}
 		if !rtCfg().FallbackAnon {
 			// 默认报错而不是降级：cookie 失效后上游不会拒绝，只是把你当匿名用户，
 			// 纯文本请求照样 200 —— 于是 3.1 Pro 被静默降级成 3.5 Flash-Lite、
@@ -587,6 +615,12 @@ func streamGenerateOnce(prompt, latest string, mc ModelConfig, pending []pending
 	inner[11] = 0
 	// 会话内轮次索引；我们每次都是新会话，恒为 0。
 	inner[17] = []interface{}{[]interface{}{0}}
+	if mc.Cont != nil {
+		// Continue an existing conversation: [cid, rid, rcid, null×6, tok26] + turn index
+		// (same shape as conversation.go's multi-turn path).
+		inner[2] = []interface{}{mc.Cont.CID, mc.Cont.RID, mc.Cont.RCID, nil, nil, nil, nil, nil, nil, ""}
+		inner[17] = []interface{}{[]interface{}{mc.Cont.Turn}}
+	}
 	inner[18] = 0
 	inner[27] = 1
 	inner[30] = []interface{}{4}
@@ -597,7 +631,7 @@ func streamGenerateOnce(prompt, latest string, mc ModelConfig, pending []pending
 	// 临时对话（#34）：inner[45]=1 让这条不进账号的会话列表、不入训练。只在有登录
 	// cookie 时发——匿名本就不落账号，发了也没意义且没验过。multi_turn 开着时
 	// temporaryChatEligible 直接为假（两者冲突，见那里）。
-	if temporaryChatEligible() && cookieStr != "" {
+	if temporaryChatEligible() && cookieStr != "" && mc.Tool != toolVideo {
 		inner[45] = 1
 	}
 	inner[53] = 0
@@ -814,9 +848,11 @@ func streamGenerateOnce(prompt, latest string, mc ModelConfig, pending []pending
 			if cid == "" {
 				cid = extractConversationID(string(raw))
 			}
-			arts, aerr := fetchMediaArtifacts(
+			result.ConvCID, result.ConvRID = cid, rid
+			arts, rcid, aerr := fetchMediaArtifacts(
 				mc.Tool, string(raw), cid, rid,
 				cookieStr, sapisid, xsrfToken, proxyURL, mime)
+			result.ConvRCID = rcid
 			if aerr != nil {
 				logf("[media] 取回产物失败: %v", aerr)
 				result.MediaErr = aerr.Error()

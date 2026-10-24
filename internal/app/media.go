@@ -128,20 +128,23 @@ func filterDownloadCookies(cookie string) string {
 // 音乐/视频走 contribution.usercontent.google.com/download（链在 hNvQHb 历史里，单次
 // 200）。按 tool 分流。
 //
-// rid scopes music/video lookup to this request's turn, so a conversation's earlier
-// turns can't be mistaken for this one.
-func fetchMediaArtifacts(tool int, raw, cid, rid, cookie, sapisid, xsrf, proxyURL, defaultMime string) ([]MediaArtifact, error) {
+// rid scopes video lookup to this request's turn: in a continued conversation
+// (video extension) the history also holds earlier turns' videos, which must not be
+// mistaken for this one. Returns the turn's response-candidate id (rcid) as well,
+// which is needed to continue the conversation again.
+func fetchMediaArtifacts(tool int, raw, cid, rid, cookie, sapisid, xsrf, proxyURL, defaultMime string) ([]MediaArtifact, string, error) {
 	if tool == toolImage {
-		return fetchImageArtifacts(raw, cid, cookie, sapisid, xsrf, proxyURL, defaultMime)
+		arts, err := fetchImageArtifacts(raw, cid, cookie, sapisid, xsrf, proxyURL, defaultMime)
+		return arts, "", err
 	}
 	// 音乐几乎立刻就绪，视频要生成几十秒到几分钟，所以视频轮询给足预算。
 	maxPolls, interval := 6, 2*time.Second
 	if tool == toolVideo {
 		maxPolls, interval = 45, 8*time.Second // 约 6 分钟
 	}
-	arts, err := fetchDownloadArtifacts(cid, rid, cookie, sapisid, xsrf, proxyURL, defaultMime, tool, maxPolls, interval)
+	arts, rcid, err := fetchDownloadArtifacts(cid, rid, cookie, sapisid, xsrf, proxyURL, defaultMime, tool, maxPolls, interval)
 	if err != nil {
-		return arts, err
+		return arts, rcid, err
 	}
 	// 视频一次请求 hNvQHb 里会挂多份下载链。Measured: one is the bare MP4 and the
 	// other is a protobuf envelope (prompt + the same MP4 + a timestamp string) that is
@@ -150,7 +153,7 @@ func fetchMediaArtifacts(tool int, raw, cid, rid, cookie, sapisid, xsrf, proxyUR
 	if tool == toolVideo && len(arts) > 0 {
 		arts = []MediaArtifact{pickVideoArtifact(arts)}
 	}
-	return arts, nil
+	return arts, rcid, nil
 }
 
 // errVideoQuota prefixes the error when an account's daily video limit is used up;
@@ -306,11 +309,12 @@ func imageFullResURL(u string) string {
 // fetchDownloadArtifacts 取回音乐/视频：轮询 hNvQHb 等到 response_data 下载链，再下。
 // gg-dl（lh3）和 temp_data 那两种链是预览用的，只有 response_data 那条能下到真字节。
 func fetchDownloadArtifacts(cid, rid, cookie, sapisid, xsrf, proxyURL, defaultMime string, tool int,
-	maxPolls int, interval time.Duration) ([]MediaArtifact, error) {
+	maxPolls int, interval time.Duration) ([]MediaArtifact, string, error) {
 	if cid == "" {
-		return nil, fmt.Errorf("没拿到会话 id，无法定位产物")
+		return nil, "", fmt.Errorf("没拿到会话 id，无法定位产物")
 	}
 	var dlURLs []string
+	rcid := ""
 	for i := 0; i < maxPolls; i++ {
 		if body, err := pollHistoryRaw(cid, cookie, sapisid, xsrf, proxyURL); err == nil {
 			if rid != "" && tool == toolVideo {
@@ -323,12 +327,15 @@ func fetchDownloadArtifacts(cid, rid, cookie, sapisid, xsrf, proxyURL, defaultMi
 				}
 				body = scoped
 			}
+			if m := rcidInTurnRe.FindString(body); m != "" {
+				rcid = m
+			}
 			// Text-only refusal: Gemini answered (reply present) but never started the
 			// video tool, e.g. "I'm having a hard time fulfilling your request." Nothing
 			// will ever be generated, so fail now with Gemini's own words.
 			if tool == toolVideo {
 				if reply, ok := turnReplyText(body); ok && !strings.Contains(body, "video_generation") {
-					return nil, fmt.Errorf("%s: Gemini declined to make this video: %q (rephrase the prompt; real-artist styles, copyrighted lyrics and violent wording are common triggers)", errVideoRefused, truncate(reply, 200))
+					return nil, rcid, fmt.Errorf("%s: Gemini declined to make this video: %q (rephrase the prompt; real-artist styles, copyrighted lyrics and violent wording are common triggers)", errVideoRefused, truncate(reply, 200))
 				}
 			}
 			if picked := pickResponseDataURLs(collectDownloadURLs(body)); len(picked) > 0 {
@@ -337,20 +344,20 @@ func fetchDownloadArtifacts(cid, rid, cookie, sapisid, xsrf, proxyURL, defaultMi
 			}
 			// 视频被内容政策拒时 hNvQHb 里是「I can't generate that video」，别干等到超时。
 			if strings.Contains(body, "can't generate that video") {
-				return nil, fmt.Errorf("视频被内容政策拒绝（换个 prompt 再试）")
+				return nil, rcid, fmt.Errorf("视频被内容政策拒绝（换个 prompt 再试）")
 			}
 			// Daily video quota exhausted on this account: the reply is "I can create more
 			// videos as soon as your limit resets" with an internal "out of video generation
 			// quota" status. Nothing will ever arrive, so fail fast instead of polling ~6 min.
 			// Nothing was consumed; the caller can resubmit (LRU picks another account).
 			if strings.Contains(body, "out of video generation quota") || strings.Contains(body, "as soon as your limit resets") {
-				return nil, fmt.Errorf("%s: this account's video generation limit is used up (resets later); resubmit to use another account", errVideoQuota)
+				return nil, rcid, fmt.Errorf("%s: this account's video generation limit is used up (resets later); resubmit to use another account", errVideoQuota)
 			}
 		}
 		time.Sleep(interval)
 	}
 	if len(dlURLs) == 0 {
-		return nil, fmt.Errorf("hNvQHb 里没等到可下载的产物链接（response_data）")
+		return nil, rcid, fmt.Errorf("hNvQHb 里没等到可下载的产物链接（response_data）")
 	}
 	var arts []MediaArtifact
 	for _, u := range dlURLs {
@@ -364,14 +371,16 @@ func fetchDownloadArtifacts(cid, rid, cookie, sapisid, xsrf, proxyURL, defaultMi
 		}
 		mime, data, err := downloadBytes(u, cookie, proxyURL, defaultMime)
 		if err != nil {
-			return arts, err
+			return arts, rcid, err
 		}
 		if !artifactSeen(arts, data) {
 			arts = append(arts, MediaArtifact{Mime: mime, Data: data})
 		}
 	}
-	return arts, nil
+	return arts, rcid, nil
 }
+
+var rcidInTurnRe = regexp.MustCompile(`rc_[0-9a-f]{8,}`)
 
 // historyTurn returns an hNvQHb-shaped body holding only the turn whose response id
 // is rid (turn[0] = [cid, rid]), so URL/refusal scans can't see other turns.

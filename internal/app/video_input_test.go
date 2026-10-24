@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 // 1x1 PNG
@@ -96,6 +97,29 @@ func TestHistoryTurnScopesToRid(t *testing.T) {
 	}
 	if _, ok := historyTurn(body, "r_zzz"); ok {
 		t.Fatal("unknown rid must not match")
+	}
+}
+
+func TestExtendRequiresCompletedParentWithConvRef(t *testing.T) {
+	p := &videoJob{ID: "video_parent1", Status: "completed", Model: "gemini-video", CreatedAt: time.Now().Unix()}
+	putVideoJob(p)
+	w := httptest.NewRecorder()
+	handleVideoItem(w, httptest.NewRequest("POST", "/v1/videos/video_parent1/extend", strings.NewReader(`{"prompt":"continue"}`)))
+	if w.Code != 409 {
+		t.Fatalf("parent without conv ref should be 409, got %d %s", w.Code, w.Body)
+	}
+	w = httptest.NewRecorder()
+	handleVideoItem(w, httptest.NewRequest("POST", "/v1/videos/video_nope/extend", strings.NewReader(`{"prompt":"x"}`)))
+	if w.Code != 404 {
+		t.Fatalf("unknown parent should be 404, got %d", w.Code)
+	}
+}
+
+func TestMP4Duration(t *testing.T) {
+	// minimal mvhd v0: version/flags(4) ctime(4) mtime(4) timescale=1000 duration=10005
+	box := []byte("....mvhd\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x03\xe8\x00\x00\x27\x15")
+	if d := mp4Duration(box); d < 10.004 || d > 10.006 {
+		t.Fatalf("duration = %v", d)
 	}
 }
 
