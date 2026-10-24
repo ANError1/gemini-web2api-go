@@ -2,6 +2,37 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## 4.24.0
+
+### 新增
+
+- **`strict_model`：上游静默降级时不当成功返回（#41 / #45 / #56）**。付费模型（3.1 Pro / 4 Argon 等）
+  额度用完或号没权限时，Google 不报错，而是静默换成 3.5 Flash-Lite 照样回 200。开关打开后，服务端
+  自报的显示名跟请求的模型对不上就在第一个字发出前掐断，换池子里下一个号重试；全池都被降级时回
+  `429 insufficient_quota`（`code: model_downgraded`，带 `Retry-After`）。被降级的号按（账号, 模型）冷却
+  `strict_model_cooldown_min` 分钟，不影响它跑别的模型。默认关，面板「设置」可开。
+  - 判据：只看帧里的显示名（整词前缀比较，兼容 `High` / `扩展` 等思考档后缀）。帧里的模型 hex 现在
+    一律是 `cf41b0e0dd7d53e5`，不管请求哪个模型，已不能用来判断。
+- **`/v1/videos` 图生视频、竖屏、续写（PR #50，@ape1121）**。`input_reference` 首帧（data / http(s) URL、
+  `{"image_url": …}` 或 multipart 文件）；`size` `720x1280` / `aspect_ratio` `9:16`；
+  `POST /v1/videos/{id}/extend` 在原会话里续写，返回加长后的完整 MP4（需要 `temporary_chat` 和
+  `auto_delete_conversation` 都关着，否则回 409）。
+- **视频额度用完自动换号 + `GET /admin/api/video-quota`（PR #51，@ape1121）**。额度被拒的号冷却到
+  Google 写在拒绝里的重置时间（没写按 1 小时），同一任务里换下一个号；全池都在冷却时
+  `POST /v1/videos` 回 `429 video_quota_exhausted` + `Retry-After`。统计接口读各号自己的会话历史，
+  所有上游请求过代理池和限流器。
+- **MCP 媒体工具（#54）**。`/mcp` 新增 `generate_image`（可带参考图）、`generate_music`、
+  `create_video_task` / `get_video_status`。产物用 MCP 原生的 `image` / `audio` / embedded resource
+  内容返回，不把 base64 写进文本；视频默认只回状态，`include_video=true` 才附 MP4。
+
+### 修复
+
+- **一次 `/v1/videos` 请求生成了 3 个视频（#50 / #55）**。视频提交的受理响应本来就没有内容帧，旧代码
+  把它当空响应重试了 3 次。现在受理帧算提交成功。
+- **视频下载挑到放不了的封装包（#50）**。以前多份下载链里挑最大的那份，现在挑真正的 MP4。
+- **视频额度用完 / 被文字拒绝时干等约 6 分钟（#50）**。现在立即失败，错误带 `video_quota_exhausted`
+  或 `video_refused: <Gemini 的回复>`。
+
 ## 4.23.0
 
 ### 新增
