@@ -63,12 +63,18 @@ func handleAdminVideoQuota(w http.ResponseWriter, r *http.Request) {
 		}
 		out = append(out, videoQuotaFor(a, now, lookback))
 	}
-	writeJSON(w, 200, map[string]any{
+	resp := map[string]any{
 		"now":            now.Unix(),
 		"window_seconds": int(quotaWindow.Seconds()),
 		"accounts":       out,
 		"note":           "Gemini app limits are compute-based: refresh every 5 h, plus an unpublished weekly cap; chats share the budget. Measured ~8 videos per account per window.",
-	})
+	}
+	// 统计全靠会话历史：临时对话不进列表、自动删会话会把它删掉，这两种开着时
+	// 本服务生成的视频在历史里看不到，计数会偏少。明说，不让人把 0 当成真没用。
+	if temporaryChatEligible() || rtCfg().AutoDeleteConversation {
+		resp["history_incomplete"] = "temporary_chat or auto_delete_conversation is on, so videos made through this proxy are not in the history and are not counted"
+	}
+	writeJSON(w, 200, resp)
 }
 
 // viaSlot 让统计的每一次上游请求都先过 acquireSlot：跟正式请求同一套出口规则
