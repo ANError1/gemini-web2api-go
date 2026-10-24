@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 )
 
 func mcpCall(t *testing.T, method string, params any) map[string]interface{} {
@@ -26,7 +27,7 @@ func TestMCPListsMediaTools(t *testing.T) {
 		names = append(names, it.(map[string]interface{})["name"].(string))
 	}
 	got := strings.Join(names, ",")
-	if got != "web_search,generate_image,generate_music" {
+	if got != "web_search,generate_image,generate_music,create_video_task,get_video_status" {
 		t.Fatalf("tools = %s", got)
 	}
 }
@@ -57,5 +58,31 @@ func TestMCPMediaContent(t *testing.T) {
 				t.Errorf("%s content = %v", mime, c)
 			}
 		}
+	}
+}
+
+func TestMCPVideoTools(t *testing.T) {
+	m := mcpCall(t, "tools/call", map[string]any{"name": "create_video_task", "arguments": map[string]any{"prompt": "a fox", "size": "1:1"}})
+	if m["isError"] != true {
+		t.Fatalf("unsupported size should be a tool error: %v", m)
+	}
+	m = mcpCall(t, "tools/call", map[string]any{"name": "get_video_status", "arguments": map[string]any{"id": "video_nope"}})
+	if m["isError"] != true {
+		t.Fatalf("unknown id should be a tool error: %v", m)
+	}
+
+	putVideoJob(&videoJob{ID: "video_mcp1", Object: "video", Model: "gemini-video", Status: "completed",
+		CreatedAt: time.Now().Unix(), mp4: []byte("mp4"), mime: "video/mp4"})
+	// 不要视频时只回状态文本
+	m = mcpCall(t, "tools/call", map[string]any{"name": "get_video_status", "arguments": map[string]any{"id": "video_mcp1"}})
+	content := m["content"].([]interface{})
+	if len(content) != 1 || !strings.Contains(content[0].(map[string]interface{})["text"].(string), `"status":"completed"`) {
+		t.Fatalf("status only: %v", m)
+	}
+	// include_video=true 时附上 MP4
+	m = mcpCall(t, "tools/call", map[string]any{"name": "get_video_status", "arguments": map[string]any{"id": "video_mcp1", "include_video": true}})
+	content = m["content"].([]interface{})
+	if len(content) != 2 || content[1].(map[string]interface{})["type"] != "resource" {
+		t.Fatalf("with video: %v", m)
 	}
 }

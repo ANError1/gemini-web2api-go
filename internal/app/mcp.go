@@ -9,7 +9,8 @@ import (
 )
 
 // MCP（Model Context Protocol）服务器：把 Gemini 网页端的联网搜索暴露成
-// web_search 工具，生图 / 音乐暴露成 generate_image / generate_music（见 mcp_media.go），
+// web_search 工具，生图 / 音乐暴露成 generate_image / generate_music，视频暴露成
+// create_video_task / get_video_status（见 mcp_media.go），
 // 供 Claude Desktop / Claude Code / Cursor 等 MCP 客户端调用。
 //
 // 传输走 HTTP（Streamable HTTP），挂在后端现有 --port 上的 /mcp，跟 OpenAI 接口
@@ -127,7 +128,8 @@ func dispatchMCP(req *rpcRequest) *rpcResponse {
 
 	case "tools/list":
 		return ok(map[string]interface{}{"tools": []interface{}{
-			webSearchToolDef(), generateImageToolDef(), generateMusicToolDef()}})
+			webSearchToolDef(), generateImageToolDef(), generateMusicToolDef(),
+			createVideoTaskToolDef(), getVideoStatusToolDef()}})
 
 	case "tools/call":
 		var p struct {
@@ -164,6 +166,19 @@ func dispatchMCP(req *rpcRequest) *rpcResponse {
 				return ok(toolTextError("生成失败: " + err.Error()))
 			}
 			return ok(result)
+		case "create_video_task":
+			result, err := mcpCreateVideo(p.Arguments)
+			if err != nil {
+				return ok(toolTextError("建任务失败: " + err.Error()))
+			}
+			return ok(result)
+		case "get_video_status":
+			j := getVideoJob(strings.TrimSpace(getStr(p.Arguments, "id")))
+			if j == nil {
+				return ok(toolTextError("video task not found"))
+			}
+			withVideo, _ := p.Arguments["include_video"].(bool)
+			return ok(mcpVideoJobResult(j, withVideo))
 		default:
 			return fail(-32602, "unknown tool: "+p.Name)
 		}

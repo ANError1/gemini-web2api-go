@@ -2,6 +2,7 @@ package app
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"strings"
 )
@@ -113,4 +114,91 @@ func mcpStrings(v interface{}) []string {
 		}
 	}
 	return out
+}
+
+func createVideoTaskToolDef() map[string]interface{} {
+	return map[string]interface{}{
+		"name": "create_video_task",
+		"description": "Start generating a video with Google Gemini (Veo). Takes one to several " +
+			"minutes; returns a task id to poll with get_video_status. Needs a paid account.",
+		"inputSchema": map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"prompt": map[string]interface{}{
+					"type":        "string",
+					"description": "What happens in the video.",
+				},
+				"size": map[string]interface{}{
+					"type":        "string",
+					"enum":        []interface{}{"1280x720", "720x1280"},
+					"description": "1280x720 (16:9, default) or 720x1280 (9:16).",
+				},
+				"input_reference": map[string]interface{}{
+					"type":        "string",
+					"description": "Optional start frame: a data: URL or http(s) link to an image.",
+				},
+			},
+			"required": []interface{}{"prompt"},
+		},
+	}
+}
+
+func getVideoStatusToolDef() map[string]interface{} {
+	return map[string]interface{}{
+		"name": "get_video_status",
+		"description": "Check a video task from create_video_task. When completed, set " +
+			"include_video to get the MP4 attached (several MB).",
+		"inputSchema": map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"id": map[string]interface{}{
+					"type":        "string",
+					"description": "The task id returned by create_video_task.",
+				},
+				"include_video": map[string]interface{}{
+					"type":        "boolean",
+					"description": "Attach the MP4 when the task is completed.",
+				},
+			},
+			"required": []interface{}{"id"},
+		},
+	}
+}
+
+// mcpCreateVideo 跟 POST /v1/videos 同一套校验和任务：尺寸、首帧、全池额度用完时直接报错。
+func mcpCreateVideo(args map[string]interface{}) (map[string]interface{}, error) {
+	prompt := strings.TrimSpace(getStr(args, "prompt"))
+	if prompt == "" {
+		return nil, fmt.Errorf("prompt 不能为空")
+	}
+	size, err := videoSize(map[string]any{"size": getStr(args, "size")})
+	if err != nil {
+		return nil, err
+	}
+	var images []pendingUpload
+	if ref := strings.TrimSpace(getStr(args, "input_reference")); ref != "" {
+		img, err := materializeImage(ref, "", 1)
+		if err != nil {
+			return nil, fmt.Errorf("input_reference: %w", err)
+		}
+		images = append(images, img)
+	}
+	if exhausted, reset := videoPoolExhausted(); exhausted {
+		return nil, fmt.Errorf("%s", videoPoolExhaustedError(reset))
+	}
+	return mcpVideoJobResult(startVideoJob("gemini-video", prompt, size, images), false), nil
+}
+
+// mcpVideoJobResult 把任务状态写成文本 JSON（跟 GET /v1/videos/{id} 同形状）；
+// 完成且 withVideo 时附上 MP4（embedded resource）。
+func mcpVideoJobResult(j *videoJob, withVideo bool) map[string]interface{} {
+	videoJobsMu.Lock()
+	state, _ := json.Marshal(j)
+	status, mp4, mime := j.Status, j.mp4, j.mime
+	videoJobsMu.Unlock()
+	content := []interface{}{map[string]interface{}{"type": "text", "text": string(state)}}
+	if withVideo && status == "completed" && len(mp4) > 0 {
+		content = append(content, mcpMediaContent(MediaArtifact{Mime: mime, Data: mp4}))
+	}
+	return map[string]interface{}{"content": content}
 }
