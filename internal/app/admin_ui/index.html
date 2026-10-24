@@ -969,6 +969,10 @@ const RT_GROUPS = [
         hint: '关：直接返回 429，本机 IP 不会暴露给上游（默认）。开：可用性优先，但上游会看到本机真实出口' },
       { k: 'fallback_anon', label: 'cookie 失效时降级匿名', type: 'bool',
         hint: '关：直接报错，能立刻发现该换号了（默认）。开：继续跑，但 3.1 Pro 会被静默降级成 3.5 Flash-Lite、思考链消失，客户端看不出来' },
+      { k: 'strict_model', label: '严格模型校验', type: 'bool',
+        hint: '开：服务端自报的模型跟请求的不一致时（通常是这个号这一档额度用完、被静默降级），不把降级后的回答当成功返回，而是换下一个号重试；全池都被降级就回 429 insufficient_quota（code: model_downgraded）。流式在吐出第一个字之前就判断。关：照常返回降级后的回答（默认）' },
+      { k: 'strict_model_cooldown_min', label: '降级冷却（分钟）', type: 'int', min: 0, max: 10080,
+        hint: '严格模型校验开着时，被降级的号在这个模型上歇多久再用。网页端用量按 5 小时窗口算，默认 300；0=不记，每次请求都重新试' },
     ],
   },
   {
@@ -1976,6 +1980,12 @@ const I18N_EN = {
   '熔断冷却（分钟）': 'Circuit-breaker cooldown (min)',
   '无可用代理时退回直连': 'Fall back to direct when no proxy is available',
   'cookie 失效时降级匿名': 'Downgrade to anonymous when cookie fails',
+  '严格模型校验': 'Strict model check',
+  '开：服务端自报的模型跟请求的不一致时（通常是这个号这一档额度用完、被静默降级），不把降级后的回答当成功返回，而是换下一个号重试；全池都被降级就回 429 insufficient_quota（code: model_downgraded）。流式在吐出第一个字之前就判断。关：照常返回降级后的回答（默认）':
+    'On: when the model the server reports differs from the one requested (usually this account ran out of quota for that tier and was silently downgraded), the downgraded answer is not returned as a success — the request retries on the next account; if the whole pool is downgraded it returns 429 insufficient_quota (code: model_downgraded). For streaming this is decided before the first token is sent. Off: returns the downgraded answer as usual (default)',
+  '降级冷却（分钟）': 'Downgrade cooldown (min)',
+  '严格模型校验开着时，被降级的号在这个模型上歇多久再用。网页端用量按 5 小时窗口算，默认 300；0=不记，每次请求都重新试':
+    'With strict model check on, how long a downgraded account rests for that model before being used again. Web usage is counted over a 5-hour window, so the default is 300; 0 = do not remember, retry on every request',
   '明细保留（天）': 'Detail retention (days)',
   '打印请求日志': 'Log requests',
   '同一时刻最多几个请求在飞，0=不限': 'Max requests in flight at once. 0 = unlimited',

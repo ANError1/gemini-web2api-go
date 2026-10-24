@@ -57,6 +57,11 @@ type Config struct {
 	// Impersonate（默认 Chrome）。直连才是完整 Firefox 指纹，走代理时 TLS 这层仍是 Go 标准库
 	// 的（隧道限制，改不了）。默认 false。见 client.go 的 isFirefoxProfile / effectiveImpersonate。
 	FirefoxFingerprint bool `json:"firefox_fingerprint"`
+	// 严格模型校验（#41）：服务端自报的模型跟请求的不一致（额度用完被静默降级）时
+	// 不把降级回答当成功，换号重试，全池降级就回 429。默认 false。见 strict_model.go。
+	StrictModel bool `json:"strict_model"`
+	// 被降级的号在该模型上冷却多久（分钟），0 = 不记。网页端用量按 5 小时滚动窗算，默认 300。
+	StrictModelCooldownMin int `json:"strict_model_cooldown_min"`
 }
 
 var (
@@ -100,6 +105,8 @@ func defaultConfig() Config {
 		AnonFirst:              false,
 		TemporaryChat:          false,
 		FirefoxFingerprint:     false,
+		StrictModel:            false,
+		StrictModelCooldownMin: 300,
 	}
 }
 

@@ -63,6 +63,10 @@ type RuntimeConfig struct {
 	// Firefox UA + 去 Sec-CH-UA）；关 → 用 Impersonate（默认 Chrome）。直连才是完整 Firefox
 	// 指纹，走代理时 TLS 仍是 Go 标准库的。默认 false。见 isFirefoxProfile / effectiveImpersonate。
 	FirefoxFingerprint bool `json:"firefox_fingerprint"`
+	// 严格模型校验（#41）：自报模型 ≠ 请求模型时换号重试，全池降级回 429。默认 false。
+	StrictModel bool `json:"strict_model"`
+	// 被降级的号在该模型上冷却多久（分钟），0 = 不记。默认 300（用量窗口 5 小时）。
+	StrictModelCooldownMin int `json:"strict_model_cooldown_min"`
 }
 
 const runtimeConfigKey = "runtime_config"
@@ -99,6 +103,8 @@ func initRuntimeConfig() {
 		AnonFirst:              cfg.AnonFirst,
 		TemporaryChat:          cfg.TemporaryChat,
 		FirefoxFingerprint:     cfg.FirefoxFingerprint,
+		StrictModel:            cfg.StrictModel,
+		StrictModelCooldownMin: cfg.StrictModelCooldownMin,
 	}
 	if raw := kvGet(runtimeConfigKey); raw != "" {
 		saved := base
@@ -143,6 +149,7 @@ func validateRuntimeConfig(c RuntimeConfig) error {
 		{"retention_days", c.RetentionDays, 1, 3650},
 		{"proxy_cooldown_min", c.ProxyCooldownMin, 0, 10080},
 		{"max_prompt_bytes", c.MaxPromptBytes, 0, 10000000},
+		{"strict_model_cooldown_min", c.StrictModelCooldownMin, 0, 10080},
 	} {
 		if r.v < r.min || r.v > r.max {
 			return fmt.Errorf("%s=%d 超出允许范围 [%d, %d]", r.name, r.v, r.min, r.max)
