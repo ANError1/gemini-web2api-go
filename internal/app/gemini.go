@@ -756,7 +756,12 @@ func streamGenerateOnce(prompt, latest string, mc ModelConfig, pending []pending
 		//
 		// 判据是**有没有内容帧**，不是 BardErrorInfo：正常响应的结束帧里也带错误码
 		// （1096 = 会话未持久化），拿它判错会把每个正常响应都判成失败。
-		if !hasContentFrame(string(raw)) {
+		// Video: Gemini now acks with a keyed-object frame ({"7":["I'm generating your
+		// video…",["video_generation",…]]}) that has no inner[4] text, so hasContentFrame
+		// says "empty" — but the job is already queued upstream. Retrying here generates
+		// one extra video per attempt (burning daily quota). Once a conversation id
+		// exists, treat it as accepted and let fetchMediaArtifacts poll hNvQHb.
+		if !hasContentFrame(string(raw)) && !videoAccepted(mc.Tool, string(raw)) {
 			lastErr = fmt.Errorf("upstream returned no content frame (raw %d bytes)", len(raw))
 			if pickedOK {
 				// 记进代理健康度：1155 跟出口质量强相关（干净出口 60+ 次 0 发生，
@@ -1084,6 +1089,12 @@ func textsInLine(line string) []string {
 		}
 	}
 	return texts
+}
+
+// videoAccepted reports whether a video StreamGenerate response shows the job was
+// queued upstream (a conversation was created), even without a text content frame.
+func videoAccepted(tool int, raw string) bool {
+	return tool == toolVideo && extractConversationID(raw) != ""
 }
 
 // hasContentFrame 判断响应里到底有没有内容帧。
