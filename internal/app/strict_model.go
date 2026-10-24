@@ -1,12 +1,14 @@
 package app
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"net/http"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -21,8 +23,98 @@ type ModelDowngradedError struct {
 }
 
 func (e *ModelDowngradedError) Error() string {
+	if e.Reported == "" {
+		return fmt.Sprintf("every cookie account was recently downgraded on %s "+
+			"(quota exhausted; strict_model is on), retry after %s", e.Requested, e.RetryAfter.Round(time.Second))
+	}
 	return fmt.Sprintf("requested %s but upstream answered with %s "+
 		"(account quota for this model is likely exhausted; strict_model is on)", e.Requested, e.Reported)
+}
+
+// 被降级的号按（账号, 模型）冷却：额度按档位算，Argon 用完了 Flash 照样能用，
+// 所以不能把整个号停掉。只放内存——重启后每个号最多再被降级一次就重新记上。
+type downgradeKey struct {
+	accountID int64
+	model     string // ModelConfig.Upstream
+}
+
+var (
+	downgradeMu    sync.Mutex
+	downgradeUntil = map[downgradeKey]time.Time{}
+)
+
+func markDowngraded(accountID int64, mc ModelConfig) {
+	mins := rtCfg().StrictModelCooldownMin
+	if accountID == 0 || mins <= 0 {
+		return
+	}
+	downgradeMu.Lock()
+	downgradeUntil[downgradeKey{accountID, mc.Upstream}] = time.Now().Add(time.Duration(mins) * time.Minute)
+	downgradeMu.Unlock()
+}
+
+// coolingAccounts 返回正在为 mc 冷却的号，以及其中最早那个还要多久解冻。顺手清掉过期项。
+func coolingAccounts(mc ModelConfig) (map[int64]bool, time.Duration) {
+	out := map[int64]bool{}
+	var soonest time.Duration
+	now := time.Now()
+	downgradeMu.Lock()
+	defer downgradeMu.Unlock()
+	for k, until := range downgradeUntil {
+		left := until.Sub(now)
+		if left <= 0 {
+			delete(downgradeUntil, k)
+			continue
+		}
+		if k.model != mc.Upstream {
+			continue
+		}
+		out[k.accountID] = true
+		if soonest == 0 || left < soonest {
+			soonest = left
+		}
+	}
+	return out, soonest
+}
+
+// pickAccountForModel 挑号，跳过 exclude（本次请求里已经被降级过的）和正在为 mc 冷却的号。
+// 返回的 skip 是两者合集，换号重取时要接着用它。
+//
+// 池里有号但全被跳过时报 *ModelDowngradedError，而不是返回 nil 让请求退成匿名：
+// 匿名对登录模型同样是降级，那正是开 strict_model 想避免的。
+func pickAccountForModel(mc ModelConfig, exclude map[int64]bool) (*CookieAccount, map[int64]bool, error) {
+	skip := map[int64]bool{}
+	for id := range exclude {
+		skip[id] = true
+	}
+	var soonest time.Duration
+	if rtCfg().StrictModel && mc.Upstream != "" {
+		var cooling map[int64]bool
+		cooling, soonest = coolingAccounts(mc)
+		for id := range cooling {
+			skip[id] = true
+		}
+	}
+	if a, ok := pickCookieAccountExcept(skip); ok {
+		return a, skip, nil
+	}
+	if len(skip) > 0 && hasCookie() {
+		return nil, skip, &ModelDowngradedError{Requested: mc.Upstream, RetryAfter: soonest}
+	}
+	return nil, skip, nil
+}
+
+// retryOnAnotherAccount 判断一次降级要不要换号重来，要的话先把这个号记进冷却和 exclude。
+// 匿名降级没号可换；已经吐过内容的不能重来（客户端会收到两遍）。
+func retryOnAnotherAccount(res *StreamResult, err error, mc ModelConfig, exclude map[int64]bool) bool {
+	var mde *ModelDowngradedError
+	if !errors.As(err, &mde) || mde.AccountID == 0 {
+		return false
+	}
+	markDowngraded(mde.AccountID, mc)
+	exclude[mde.AccountID] = true
+	logf("[strict_model] 账号 #%d 在 %s 上被降级成 %s", mde.AccountID, mc.Upstream, mde.Reported)
+	return res == nil || (res.Emitted == "" && res.EmittedReasoning == "")
 }
 
 // writeModelDowngraded 回 429 insufficient_quota：跟 OpenAI 额度用完同一个形状，

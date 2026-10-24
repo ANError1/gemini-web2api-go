@@ -357,6 +357,32 @@ type fileRef struct {
 // 匿名能把文件传上去，但对话里一引用就被服务端回 1100。
 func streamGenerateWithFiles(prompt, latest string, mc ModelConfig, pending []pendingUpload,
 	onDelta, onReasoning func(string)) (*StreamResult, error) {
+	// strict_model 换号：被降级的号记冷却、本次排除，换下一个号重来。上限跟 XSRF 换号
+	// 一样是 maxCookieTries——连着几个号都降级，说明池子整体见底，不是撞上个别号。
+	exclude := map[int64]bool{}
+	var res *StreamResult
+	var err error
+	for try := 0; try < maxCookieTries; try++ {
+		next, nextErr := streamGenerateOnce(prompt, latest, mc, pending, onDelta, onReasoning, exclude)
+		var exhausted *ModelDowngradedError
+		if try > 0 && errors.As(nextErr, &exhausted) && exhausted.Reported == "" {
+			// 换号时已经没号可挑：报上一个号真实的降级（带自报模型名），补上解冻时间
+			var last *ModelDowngradedError
+			if errors.As(err, &last) {
+				last.RetryAfter = exhausted.RetryAfter
+			}
+			return res, err
+		}
+		res, err = next, nextErr
+		if !retryOnAnotherAccount(res, err, mc, exclude) {
+			return res, err
+		}
+	}
+	return res, err
+}
+
+func streamGenerateOnce(prompt, latest string, mc ModelConfig, pending []pendingUpload,
+	onDelta, onReasoning func(string), exclude map[int64]bool) (*StreamResult, error) {
 	var files []fileRef
 
 	// 先挑号，再按它上次绑的出口挑代理 —— 同一个账号要尽量固定从同一个 IP 出去，
@@ -367,10 +393,13 @@ func streamGenerateWithFiles(prompt, latest string, mc ModelConfig, pending []pe
 	// #20 匿名优先：不需要登录态能力时不占用 cookie 账号，走匿名省额度（见 anonFirstEligible）。
 	// 带附件（图/视频）时不能走匿名——下面 uploadBytes 那段会因 cookieStr=="" 直接报错。
 	var acct *CookieAccount
+	skip := exclude
 	if !anonFirstEligible(mc, len(pending) > 0) {
-		if a, ok := pickCookieAccount(); ok {
-			acct = a
+		a, s, err := pickAccountForModel(mc, exclude)
+		if err != nil {
+			return &StreamResult{}, err
 		}
+		acct, skip = a, s
 	}
 	preferProxy := int64(0)
 	if acct != nil {
@@ -464,7 +493,14 @@ func streamGenerateWithFiles(prompt, latest string, mc ModelConfig, pending []pe
 		markCookieByStatus(acct.ID, 401, err.Error())
 		lastCookieErr = err
 		logf("[cookie] 账号 #%d 不可用，换下一个：%v", acct.ID, err)
-		acct, _ = pickCookieAccountExcept(tried) // 取不到时返回 nil，循环自然结束
+		next := map[int64]bool{}
+		for id := range skip {
+			next[id] = true
+		}
+		for id := range tried {
+			next[id] = true
+		}
+		acct, _ = pickCookieAccountExcept(next) // 取不到时返回 nil，循环自然结束
 	}
 	if lastCookieErr != nil && cookieStr == "" {
 		if !rtCfg().FallbackAnon {
@@ -666,6 +702,8 @@ func streamGenerateWithFiles(prompt, latest string, mc ModelConfig, pending []pe
 			res, _ := attrib(nil)
 			res.UpstreamModel = mde.Reported
 			res.TotalMs = time.Since(t0).Milliseconds()
+			// 带上已发出的部分：调用方据此判断还能不能换号重来
+			res.Emitted, res.EmittedReasoning = tracker.emitted, rtracker.emitted
 			return res, err
 		}
 		if err != nil {

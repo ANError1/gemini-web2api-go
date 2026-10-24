@@ -41,6 +41,88 @@ func TestStrictLineCheck(t *testing.T) {
 	}
 }
 
+func addTestAccount(t *testing.T, label string) int64 {
+	t.Helper()
+	id, err := accountAdd(label, "SAPISID="+label+"; SID=x", "")
+	if err != nil {
+		t.Fatalf("插测试账号失败: %v", err)
+	}
+	t.Cleanup(func() { _ = accountDelete(id) })
+	return id
+}
+
+func resetDowngrades(t *testing.T) {
+	t.Cleanup(func() { downgradeMu.Lock(); downgradeUntil = map[downgradeKey]time.Time{}; downgradeMu.Unlock() })
+}
+
+func TestPickAccountForModelSkipsCooling(t *testing.T) {
+	setStrictModel(t, true)
+	rtMu.Lock()
+	rtVal.StrictModelCooldownMin = 300
+	rtMu.Unlock()
+	resetDowngrades(t)
+	a1 := addTestAccount(t, "acct1")
+	a2 := addTestAccount(t, "acct2")
+	argon, flash := Models["gemini-4-argon"], Models["gemini-3.6-flash"]
+
+	markDowngraded(a1, argon)
+	for i := 0; i < 4; i++ { // 轮转会换号，多挑几次确认 a1 一次都不出现
+		a, _, err := pickAccountForModel(argon, nil)
+		if err != nil || a == nil || a.ID != a2 {
+			t.Fatalf("a1 在 Argon 上冷却中，应只挑到 a2，得到 %v %v", a, err)
+		}
+	}
+	if _, skip, _ := pickAccountForModel(flash, nil); skip[a1] {
+		t.Fatal("冷却只针对被降级的那一档，a1 在 3.6 Flash 上应照常可用")
+	}
+
+	markDowngraded(a2, argon)
+	_, _, err := pickAccountForModel(argon, nil)
+	var mde *ModelDowngradedError
+	if !errors.As(err, &mde) || mde.Reported != "" || mde.RetryAfter < 299*time.Minute {
+		t.Fatalf("全池冷却应报降级错误并带解冻时间（~300 分钟），得到 %v", err)
+	}
+}
+
+// cooldown=0：不记冷却，但同一请求里换号仍靠 exclude 生效。
+func TestCooldownZeroStillExcludesWithinRequest(t *testing.T) {
+	setStrictModel(t, true)
+	rtMu.Lock()
+	rtVal.StrictModelCooldownMin = 0
+	rtMu.Unlock()
+	resetDowngrades(t)
+	a1 := addTestAccount(t, "acct1")
+	a2 := addTestAccount(t, "acct2")
+	argon := Models["gemini-4-argon"]
+
+	exclude := map[int64]bool{}
+	err := &ModelDowngradedError{Requested: "4 Argon", Reported: "3.5 Flash-Lite", AccountID: a1}
+	if !retryOnAnotherAccount(&StreamResult{}, err, argon, exclude) {
+		t.Fatal("没吐过内容的降级应换号重来")
+	}
+	if cooling, _ := coolingAccounts(argon); len(cooling) != 0 {
+		t.Fatalf("cooldown=0 不该记冷却：%v", cooling)
+	}
+	if a, _, _ := pickAccountForModel(argon, exclude); a == nil || a.ID != a2 {
+		t.Fatalf("本次请求里 a1 已降级，应换到 a2，得到 %v", a)
+	}
+}
+
+func TestRetryOnAnotherAccountGuards(t *testing.T) {
+	setStrictModel(t, true)
+	resetDowngrades(t)
+	argon := Models["gemini-4-argon"]
+	if retryOnAnotherAccount(&StreamResult{}, &ModelDowngradedError{Reported: "x"}, argon, map[int64]bool{}) {
+		t.Error("匿名降级没号可换")
+	}
+	if retryOnAnotherAccount(&StreamResult{Emitted: "部分"}, &ModelDowngradedError{Reported: "x", AccountID: 9}, argon, map[int64]bool{}) {
+		t.Error("已经吐过内容的不能重来，客户端会收到两遍")
+	}
+	if retryOnAnotherAccount(&StreamResult{}, errors.New("网络错误"), argon, map[int64]bool{}) {
+		t.Error("非降级错误不归这里管")
+	}
+}
+
 // 回调报错必须立刻停读：后面的行不能再回调，否则正文会在报错之前漏给客户端。
 func TestReadBodyStopsOnCallbackError(t *testing.T) {
 	stop := errors.New("stop")
