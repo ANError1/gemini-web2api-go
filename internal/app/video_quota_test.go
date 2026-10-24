@@ -1,8 +1,8 @@
 package app
 
 import (
+	"encoding/base64"
 	"encoding/json"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -32,13 +32,15 @@ func TestClassifyVideoTurns(t *testing.T) {
 		t.Fatalf("bad refusal event: %+v", evs[0])
 	}
 
-	// Real ready-video history captured earlier (tokens intact only in the local
-	// debug copy); skip when it isn't around.
-	if raw, err := os.ReadFile("../../../debug/probe/hist_c_0a840dff0f2e13b1.txt"); err == nil {
-		evs := classifyVideoTurns(string(raw))
-		if len(evs) != 1 || evs[0].Kind != "video" || evs[0].At == 0 {
-			t.Fatalf("ready video not classified: %+v", evs)
-		}
+	// 成品视频：带 response_data 下载链的那一轮（c 参数是含该标记的 base64）。
+	c := base64.RawURLEncoding.EncodeToString([]byte("response_data:clip"))
+	ready := []any{[]any{"c_1", "r_4"}, nil, []any{[]any{"a fox"}}, []any{[]any{"rc_44444444",
+		[]any{"Here is your video"},
+		map[string]any{"60": []any{"video_generation", []any{"https://contribution.usercontent.google.com/download?c=" + c}}}}},
+		[]any{1792104000, 0}}
+	evs = classifyVideoTurns(turnBody(ready))
+	if len(evs) != 1 || evs[0].Kind != "video" || evs[0].At != 1792104000 {
+		t.Fatalf("ready video not classified: %+v", evs)
 	}
 }
 
