@@ -76,6 +76,11 @@ type ModelConfig struct {
 	// 用下载 host 认的 cookie 子集下回原始字节，见 media.go。跟登录态绑定：匿名请求
 	// 这个会被静默降级成一句「Are you signed in?」文本。
 	Tool int
+	// Upstream 是真用上这个模型时服务端自报的显示名（不含思考档后缀："3.1 Pro High"
+	// 记 "3.1 Pro"）。strict_model 拿它判静默降级，空 = 不判（媒体工具回报的是
+	// "Nano Banana 2" 这类后端名）。只能用显示名：跟它并排的 hex 现在不管实际用了
+	// 哪个模型都回 Flash-Lite 的那个。
+	Upstream string
 }
 
 // thinkWire 返回思考档线值（填 header 下标15 / inner[80]）：ThinkWire 显式指定优先，
@@ -95,32 +100,32 @@ func (mc ModelConfig) thinkWire() int {
 // gemini-flash-lite 别名已移除：它们在服务端没有对应条目，留着只会让人
 // 以为有五种不同的模型可选。
 var Models = map[string]ModelConfig{
-	"gemini-3.6-flash":      {HexID: hexFlash36, Mode: 1, Desc: "Latest all-around model"},
-	"gemini-3.5-flash-lite": {HexID: hexFlashLite, Mode: 6, Desc: "Fastest, lightweight"},
-	"gemini-3.1-pro":        {HexID: hexPro31, Mode: 3, Desc: "Most capable; needs a signed-in cookie (downgraded to Flash-Lite without one)"},
+	"gemini-3.6-flash":      {HexID: hexFlash36, Mode: 1, Upstream: "3.6 Flash", Desc: "Latest all-around model"},
+	"gemini-3.5-flash-lite": {HexID: hexFlashLite, Mode: 6, Upstream: "3.5 Flash-Lite", Desc: "Fastest, lightweight"},
+	"gemini-3.1-pro":        {HexID: hexPro31, Mode: 3, Upstream: "3.1 Pro", Desc: "Most capable; needs a signed-in cookie (downgraded to Flash-Lite without one)"},
 	// 3.8 Flash：Google 把原 3.7 那个 hex 原地升级了（同 hex，服务端显示名从 3.7 变 3.8）。
 	// 实测是**付费号专属**（不是灰度）：只有付费 Gemini 账号有，免费号降级成 3.5 Flash-Lite。
 	// gemini-3.7-flash 保留为别名（同 hex）。
-	"gemini-3.8-flash": {HexID: hexFlash38, Mode: 1, Desc: "3.8 Flash; needs a signed-in PAID Google account (free accounts get downgraded to 3.5 Flash-Lite)"},
-	"gemini-3.7-flash": {HexID: hexFlash38, Mode: 1, Desc: "alias of gemini-3.8-flash (same hex; Google renamed 3.7→3.8)"},
+	"gemini-3.8-flash": {HexID: hexFlash38, Mode: 1, Upstream: "3.8 Flash", Desc: "3.8 Flash; needs a signed-in PAID Google account (free accounts get downgraded to 3.5 Flash-Lite)"},
+	"gemini-3.7-flash": {HexID: hexFlash38, Mode: 1, Upstream: "3.8 Flash", Desc: "alias of gemini-3.8-flash (same hex; Google renamed 3.7→3.8)"},
 	// 4 Argon（#35）：Mode=8 是真正的选择开关（见 hexArgon4 注释）。付费/Ultra 号专属，
 	// 免费号发它会被静默降级成 3.5 Flash-Lite，所以 gate 成要 cookie（modelNeedsLogin）。
-	"gemini-4-argon": {HexID: hexArgon4, Mode: 8, Desc: "4 Argon (complex tasks); needs a signed-in PAID/Ultra Google account (free accounts get downgraded to 3.5 Flash-Lite)"},
+	"gemini-4-argon": {HexID: hexArgon4, Mode: 8, Upstream: "4 Argon", Desc: "4 Argon (complex tasks); needs a signed-in PAID/Ultra Google account (free accounts get downgraded to 3.5 Flash-Lite)"},
 
 	// 扩展思考版。inner[80]=2 跟模型 hex 正交，都能开；但只在登录态生效，
 	// 所以跟 3.1 Pro 一样在没 cookie 时不暴露。
-	"gemini-3.6-flash-thinking":      {HexID: hexFlash36, Mode: 1, Thinking: true, Desc: "3.6 Flash with extended thinking; needs a signed-in cookie"},
-	"gemini-3.5-flash-lite-thinking": {HexID: hexFlashLite, Mode: 6, Thinking: true, Desc: "3.5 Flash-Lite with extended thinking; needs a signed-in cookie"},
-	"gemini-3.1-pro-thinking":        {HexID: hexPro31, Mode: 3, Thinking: true, Desc: "3.1 Pro with extended thinking; needs a signed-in cookie"},
-	"gemini-3.8-flash-thinking":      {HexID: hexFlash38, Mode: 1, Thinking: true, Desc: "3.8 Flash with extended thinking; needs a signed-in cookie"},
-	"gemini-3.7-flash-thinking":      {HexID: hexFlash38, Mode: 1, Thinking: true, Desc: "alias of gemini-3.8-flash-thinking"},
+	"gemini-3.6-flash-thinking":      {HexID: hexFlash36, Mode: 1, Thinking: true, Upstream: "3.6 Flash", Desc: "3.6 Flash with extended thinking; needs a signed-in cookie"},
+	"gemini-3.5-flash-lite-thinking": {HexID: hexFlashLite, Mode: 6, Thinking: true, Upstream: "3.5 Flash-Lite", Desc: "3.5 Flash-Lite with extended thinking; needs a signed-in cookie"},
+	"gemini-3.1-pro-thinking":        {HexID: hexPro31, Mode: 3, Thinking: true, Upstream: "3.1 Pro", Desc: "3.1 Pro with extended thinking; needs a signed-in cookie"},
+	"gemini-3.8-flash-thinking":      {HexID: hexFlash38, Mode: 1, Thinking: true, Upstream: "3.8 Flash", Desc: "3.8 Flash with extended thinking; needs a signed-in cookie"},
+	"gemini-3.7-flash-thinking":      {HexID: hexFlash38, Mode: 1, Thinking: true, Upstream: "3.8 Flash", Desc: "alias of gemini-3.8-flash-thinking"},
 	// 4 Argon + 扩展思考：Mode=8（选 Argon）+ inner[80]=2（上游现在把这档叫 "High"）。
 	// 实测回报 "4 Argon High" 且带思考链（硬题 985 字符，走既有 [4][0][37][0][0] 路径，
 	// 无需改抽取代码）→ 映射成 reasoning_content。付费/Ultra 专属。
-	"gemini-4-argon-thinking": {HexID: hexArgon4, Mode: 8, Thinking: true, Desc: "4 Argon with extended thinking (High reasoning tier); emits reasoning_content; needs a signed-in PAID/Ultra account"},
+	"gemini-4-argon-thinking": {HexID: hexArgon4, Mode: 8, Thinking: true, Upstream: "4 Argon", Desc: "4 Argon with extended thinking (High reasoning tier); emits reasoning_content; needs a signed-in PAID/Ultra account"},
 	// 中档：think 线值 4（高档是 2）。中档思考在服务端内部完成、不吐思考链，所以不设
 	// Thinking（不期望 reasoning_content），登录门控靠 hexArgon4 + thinkWire。
-	"gemini-4-argon-thinking-medium": {HexID: hexArgon4, Mode: 8, ThinkWire: thinkingMedium, Desc: "4 Argon at the Medium thinking tier (thinks server-side, no reasoning_content); needs a signed-in PAID/Ultra account"},
+	"gemini-4-argon-thinking-medium": {HexID: hexArgon4, Mode: 8, ThinkWire: thinkingMedium, Upstream: "4 Argon", Desc: "4 Argon at the Medium thinking tier (thinks server-side, no reasoning_content); needs a signed-in PAID/Ultra account"},
 
 	// 媒体生成。inner[49] 一填，服务端换后端模型出图/出乐；产物走 hNvQHb + 下载 host
 	// 取回，以 base64 data URL 塞进 content 返回。都要登录态，没 cookie 时不暴露。
