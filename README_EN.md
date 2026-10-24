@@ -23,7 +23,7 @@ Turn the Google Gemini web app into an OpenAI-compatible API. **Single binary**,
 - [Features](#features)
 - [Quick start](#quick-start)
 - [Connecting clients](#connecting-clients)
-- [MCP (web_search tool)](#mcp-web_search-tool)
+- [MCP tools](#mcp-tools)
 - [Admin panel](#admin-panel)
 - [Models](#models)
 - [Configuration](#configuration)
@@ -223,16 +223,16 @@ Every OpenAI-compatible client (Cherry Studio / ChatBox / Open WebUI / dify / Cu
 
 There is also an unauthenticated health check at `GET /` returning `{"status":"ok","version":…,"models":[…]}`.
 
-## MCP (web_search tool)
+## MCP tools
 
 Besides the OpenAI API, the same process and port also serves an **MCP server** at `/mcp`,
-exposing Gemini's web-grounded **search** as a `web_search` tool. This lets MCP clients
-(Claude Desktop / Claude Code / Cursor) "search the web through Gemini" and get a
-**synthesized answer plus source links** back.
+exposing Gemini's web-grounded **search**, **image**, **music** and **video** generation as
+tools that MCP clients (Claude Desktop / Claude Code / Cursor) can call directly.
 
 No separate process or deployment — running the backend gives you this. The transport is
 HTTP (Streamable HTTP), so remote clients just point at the URL, reusing the backend's
-account pool / proxy pool / rate limiting. Search works anonymously; no cookie required.
+account pool / proxy pool / rate limiting. Search works anonymously; image / music / video
+need a cookie (video needs a paid account).
 
 **Client config** (Claude Desktop's `claude_desktop_config.json`):
 
@@ -251,9 +251,17 @@ account pool / proxy pool / rate limiting. Search works anonymously; no cookie r
 - `Authorization` is the same API key as the OpenAI endpoint (shown on the Settings page).
 - Claude Code: `claude mcp add --transport http gemini-search http://localhost:8083/mcp --header "Authorization: Bearer sk-gemini-your-key"`.
 
-The `web_search(query)` tool takes a query/question and returns Gemini's web-grounded
-answer with a `Sources:` list appended. It's the only tool for now (`url_context` — reading
-a specific URL's content — is not implemented yet).
+| Tool | Arguments | Returns |
+|---|---|---|
+| `web_search` | `query` | Gemini's web-grounded answer with a `Sources:` list appended |
+| `generate_image` | `prompt`, optional `image_urls` (reference images: data: or http(s) links) | the image (MCP `image` content) |
+| `generate_music` | `prompt` | a ~30 s clip (MCP `audio` content; an embedded resource when upstream doesn't serve `audio/*`) |
+| `create_video_task` | `prompt`, optional `size` (`1280x720` / `720x1280`), `input_reference` (start frame) | a task id, the same jobs as `/v1/videos` |
+| `get_video_status` | `id`, optional `include_video` | the task status; with `include_video=true` on a finished task, the MP4 attached (embedded resource, several MB) |
+
+Results use MCP's native media content types (base64 in `data` / `blob`, with `mimeType`), not
+text, so clients that support them render an attachment. `url_context` (reading a specific
+URL's content) is not implemented yet.
 
 ## Admin panel
 
@@ -614,7 +622,7 @@ This is an independent Go implementation. Its early protocol work was informed b
 it is **not a port**, and other Go repositories with a similar name are unrelated. What this one brings: a single
 static binary, a real Chrome TLS fingerprint via utls, a proxy pool plus a cookie pool (automatic renewal, each
 account pinned to one exit), a built-in admin dashboard, SQLite / MySQL / PostgreSQL, the async `/v1/videos`
-endpoint, and an MCP `web_search` tool.
+endpoint, and MCP tools (search / image / music / video).
 
 ### Why does my cookie die after about 30 minutes? How do I keep it alive?
 

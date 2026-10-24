@@ -23,7 +23,7 @@
 - [功能](#功能)
 - [快速开始](#快速开始)
 - [客户端接入](#客户端接入)
-- [MCP（web_search 工具）](#mcpweb_search-工具)
+- [MCP 工具](#mcp-工具)
 - [管理面板](#管理面板)
 - [模型](#模型)
 - [配置](#配置)
@@ -220,14 +220,14 @@ OpenAI 形状的接口，没做 `/v1beta`。
 
 另有一个不鉴权的健康检查 `GET /`，返回 `{"status":"ok","version":…,"models":[…]}`，给探活用。
 
-## MCP（web_search 工具）
+## MCP 工具
 
 除了 OpenAI 接口，同一个进程、同一个端口还挂了一个 **MCP server**，在 `/mcp` 上，
-把 Gemini 网页端的**联网搜索**暴露成一个 `web_search` 工具。让 Claude Desktop /
-Claude Code / Cursor 这类 MCP 客户端能「用 Gemini 去搜网」，返回**合成答案 + 来源链接**。
+把 Gemini 网页端的**联网搜索**、**生图**、**音乐**、**视频**暴露成工具，让 Claude Desktop /
+Claude Code / Cursor 这类 MCP 客户端直接调用。
 
 不用单独起进程、不用额外部署——起了后端就有。传输是 HTTP（Streamable HTTP），
-所以远程客户端连 URL 就能用，复用后端的账号池 / 代理池 / 限流。匿名即可搜，不必挂 cookie。
+所以远程客户端连 URL 就能用，复用后端的账号池 / 代理池 / 限流。搜索匿名即可，生图 / 音乐 / 视频要配 cookie（视频要付费号）。
 
 **客户端配置**（以 Claude Desktop 的 `claude_desktop_config.json` 为例）：
 
@@ -246,8 +246,16 @@ Claude Code / Cursor 这类 MCP 客户端能「用 Gemini 去搜网」，返回*
 - `Authorization` 填 OpenAI 接口那把同样的 API key（面板「设置」页里看）。
 - Claude Code：`claude mcp add --transport http gemini-search http://localhost:8083/mcp --header "Authorization: Bearer sk-gemini-你的key"`。
 
-工具 `web_search(query)`：传一个查询/问题，返回 Gemini 联网查证后的答案，末尾附
-`Sources:` 来源清单。当前只有这一个工具（读取指定 URL 的 `url_context` 暂未做）。
+| 工具 | 参数 | 返回 |
+|---|---|---|
+| `web_search` | `query` | Gemini 联网查证后的答案，末尾附 `Sources:` 来源清单 |
+| `generate_image` | `prompt`，可选 `image_urls`（参考图，data: 或 http(s) 链接） | 图片（MCP `image` 内容） |
+| `generate_music` | `prompt` | 约 30 秒音乐（MCP `audio` 内容；上游给的不是 `audio/*` 时用 embedded resource） |
+| `create_video_task` | `prompt`，可选 `size`（`1280x720` / `720x1280`）、`input_reference`（首帧） | 任务 id，跟 `/v1/videos` 是同一套任务 |
+| `get_video_status` | `id`，可选 `include_video` | 任务状态；完成且 `include_video=true` 时附上 MP4（embedded resource，几 MB） |
+
+产物用 MCP 原生的媒体内容类型返回（base64 在 `data` / `blob` 字段，带 `mimeType`），不写进文本，
+支持的客户端会当附件渲染。读取指定 URL 的 `url_context` 暂未做。
 
 ## 管理面板
 
@@ -681,7 +689,7 @@ Docker 用默认 bridge 网络时上游可能返回空内容（Google 拒绝某�
 
 本仓是独立的 Go 实现，早期摸网页协议时参考过 Python 版的思路（见文末友情链接），**不是移植版**；
 其它同名的 Go 项目与本仓无关。本仓自己的特点：单二进制、utls 模拟 Chrome 真 TLS 指纹、代理池 + Cookie 池（自动续期、
-账号粘住出口）、带管理面板、SQLite / MySQL / PostgreSQL、`/v1/videos` 异步视频接口、MCP `web_search` 工具。
+账号粘住出口）、带管理面板、SQLite / MySQL / PostgreSQL、`/v1/videos` 异步视频接口、MCP 工具（搜索 / 生图 / 音乐 / 视频）。
 
 ### Cookie 为什么大约半小时就失效？怎么长期用？
 
