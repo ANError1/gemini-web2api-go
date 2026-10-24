@@ -804,8 +804,12 @@ func streamGenerateOnce(prompt, latest string, mc ModelConfig, pending []pending
 			case toolVideo:
 				mime = "video/mp4"
 			}
+			cid, rid, _, _ := parseConvIDs(string(raw))
+			if cid == "" {
+				cid = extractConversationID(string(raw))
+			}
 			arts, aerr := fetchMediaArtifacts(
-				mc.Tool, string(raw), extractConversationID(string(raw)),
+				mc.Tool, string(raw), cid, rid,
 				cookieStr, sapisid, xsrfToken, proxyURL, mime)
 			if aerr != nil {
 				logf("[media] 取回产物失败: %v", aerr)
