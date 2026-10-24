@@ -140,18 +140,104 @@ func fetchMediaArtifacts(tool int, raw, cid, cookie, sapisid, xsrf, proxyURL, de
 	if err != nil {
 		return arts, err
 	}
-	// 视频一次请求 hNvQHb 里会挂多份下载链（疑似 Veo 的多候选/多档编码，含义未严谨证明），
-	// 只留最大的那份，免得客户端一次拿到两个视频。要区分含义得有干净出口再验（见 CLAUDE.md）。
-	if tool == toolVideo && len(arts) > 1 {
-		largest := arts[0]
-		for _, a := range arts[1:] {
-			if len(a.Data) > len(largest.Data) {
-				largest = a
-			}
-		}
-		arts = []MediaArtifact{largest}
+	// 视频一次请求 hNvQHb 里会挂多份下载链。Measured: one is the bare MP4 and the
+	// other is a protobuf envelope (prompt + the same MP4 + a timestamp string) that is
+	// *larger*, so "keep the largest" handed clients an unplayable file. Prefer real
+	// MP4 bytes; if only envelopes came back, unwrap the MP4 embedded in them.
+	if tool == toolVideo && len(arts) > 0 {
+		arts = []MediaArtifact{pickVideoArtifact(arts)}
 	}
 	return arts, nil
+}
+
+// isMP4 reports whether b starts with an ISO-BMFF box header ("....ftyp").
+func isMP4(b []byte) bool {
+	return len(b) >= 12 && string(b[4:8]) == "ftyp"
+}
+
+// pickVideoArtifact returns the largest artifact that is a bare MP4; failing that, the
+// largest MP4 found inside a protobuf envelope; failing that, the largest artifact.
+func pickVideoArtifact(arts []MediaArtifact) MediaArtifact {
+	var best *MediaArtifact
+	for i := range arts {
+		a := arts[i]
+		if !isMP4(a.Data) {
+			if inner := mp4InProtobuf(a.Data, 0); inner != nil {
+				a = MediaArtifact{Mime: "video/mp4", Data: inner}
+			} else {
+				continue
+			}
+		}
+		if best == nil || len(a.Data) > len(best.Data) {
+			best = &a
+		}
+	}
+	if best != nil {
+		best.Mime = "video/mp4"
+		return *best
+	}
+	largest := arts[0]
+	for _, a := range arts[1:] {
+		if len(a.Data) > len(largest.Data) {
+			largest = a
+		}
+	}
+	return largest
+}
+
+// mp4InProtobuf walks protobuf length-delimited fields (recursively) and returns the
+// first payload that is an MP4. Returns nil if b doesn't parse as protobuf.
+func mp4InProtobuf(b []byte, depth int) []byte {
+	if depth > 6 {
+		return nil
+	}
+	varint := func(i int) (uint64, int, bool) {
+		var v uint64
+		for s := uint(0); i < len(b) && s < 64; s += 7 {
+			c := b[i]
+			i++
+			v |= uint64(c&0x7f) << s
+			if c < 0x80 {
+				return v, i, true
+			}
+		}
+		return 0, i, false
+	}
+	for i := 0; i < len(b); {
+		key, next, ok := varint(i)
+		if !ok {
+			return nil
+		}
+		i = next
+		switch key & 7 {
+		case 0:
+			if _, i, ok = varint(i); !ok {
+				return nil
+			}
+		case 1:
+			i += 8
+		case 5:
+			i += 4
+		case 2:
+			n, next, ok := varint(i)
+			if !ok || next+int(n) > len(b) || int(n) < 0 {
+				return nil
+			}
+			p := b[next : next+int(n)]
+			i = next + int(n)
+			if isMP4(p) {
+				return p
+			}
+			if len(p) > 1024 {
+				if r := mp4InProtobuf(p, depth+1); r != nil {
+					return r
+				}
+			}
+		default:
+			return nil
+		}
+	}
+	return nil
 }
 
 // fetchImageArtifacts 取回生成的图片。链在 StreamGenerate 响应里就有，抠不到再退回轮询
