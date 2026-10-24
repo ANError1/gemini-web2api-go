@@ -11,6 +11,8 @@ package app
 
 import (
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -24,6 +26,7 @@ type videoJob struct {
 	Status    string `json:"status"` // queued | in_progress | completed | failed
 	CreatedAt int64  `json:"created_at"`
 	Prompt    string `json:"prompt,omitempty"`
+	Size      string `json:"size,omitempty"` // "1280x720" (16:9) or "720x1280" (9:16)
 	Error     string `json:"error,omitempty"`
 
 	mp4  []byte // 完成后的视频字节，不进 JSON
@@ -61,7 +64,34 @@ func handleCreateVideo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req map[string]any
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	var fileRef *pendingUpload
+	if strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/form-data") {
+		// OpenAI SDK shape: videos.create(prompt=..., input_reference=<file>) is multipart.
+		if err := r.ParseMultipartForm(maxImageBytes + 1<<20); err != nil {
+			writeJSON(w, 400, map[string]any{"error": map[string]string{"message": "bad multipart body: " + err.Error()}})
+			return
+		}
+		req = map[string]any{}
+		for k, v := range r.MultipartForm.Value {
+			if len(v) > 0 {
+				req[k] = v[0]
+			}
+		}
+		if f, hdr, err := r.FormFile("input_reference"); err == nil {
+			data, rerr := io.ReadAll(io.LimitReader(f, maxImageBytes+1))
+			f.Close()
+			mime := hdr.Header.Get("Content-Type")
+			if mime == "" || mime == "application/octet-stream" {
+				mime = http.DetectContentType(data)
+			}
+			up, uerr := newMediaUpload(data, mime, 1)
+			if rerr != nil || uerr != nil {
+				writeJSON(w, 400, map[string]any{"error": map[string]string{"message": fmt.Sprintf("input_reference: %v%v", rerr, uerr), "type": "invalid_request_error"}})
+				return
+			}
+			fileRef = &up
+		}
+	} else if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, 400, map[string]any{"error": map[string]string{"message": "bad json body"}})
 		return
 	}
@@ -81,7 +111,27 @@ func handleCreateVideo(w http.ResponseWriter, r *http.Request) {
 			"message": "model must be a video model (gemini-video)", "type": "invalid_request_error"}})
 		return
 	}
+	// Image→video: OpenAI Sora's `input_reference` (start frame). Accepts a data: URL,
+	// an http(s) URL, or {"image_url": "..."} / {"url": "..."}. Materialized now so a
+	// bad image fails the POST (400) instead of a queued job.
+	var images []pendingUpload
+	if fileRef != nil {
+		images = append(images, *fileRef)
+	} else if ref := inputReferenceSrc(req["input_reference"]); ref != "" {
+		img, err := materializeImage(ref, "", 1)
+		if err != nil {
+			writeJSON(w, 400, map[string]any{"error": map[string]string{"message": "input_reference: " + err.Error(), "type": "invalid_request_error"}})
+			return
+		}
+		images = append(images, img)
+	}
+	size, err := videoSize(req)
+	if err != nil {
+		writeJSON(w, 400, map[string]any{"error": map[string]string{"message": err.Error(), "type": "invalid_request_error"}})
+		return
+	}
 	j := &videoJob{
+		Size:      size,
 		ID:        "video_" + randHex(16),
 		Object:    "video",
 		Model:     model,
@@ -90,12 +140,48 @@ func handleCreateVideo(w http.ResponseWriter, r *http.Request) {
 		Prompt:    prompt,
 	}
 	putVideoJob(j)
-	go runVideoJob(j)
+	go runVideoJob(j, images)
 	writeJSON(w, 200, j)
 }
 
+// videoSize maps OpenAI's `size` ("1280x720"/"720x1280") or an `aspect_ratio`
+// ("16:9"/"9:16") onto the two shapes Gemini web can produce. Default 16:9.
+func videoSize(req map[string]any) (string, error) {
+	s, _ := req["size"].(string)
+	if s == "" {
+		s, _ = req["aspect_ratio"].(string)
+	}
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "", "16:9", "landscape", "1280x720", "1920x1080":
+		return "1280x720", nil
+	case "9:16", "portrait", "720x1280", "1080x1920":
+		return "720x1280", nil
+	}
+	return "", fmt.Errorf("unsupported size %q: use 1280x720 (16:9) or 720x1280 (9:16)", s)
+}
+
+// inputReferenceSrc pulls an image source out of the input_reference field.
+func inputReferenceSrc(v any) string {
+	switch x := v.(type) {
+	case string:
+		return strings.TrimSpace(x)
+	case map[string]any:
+		for _, k := range []string{"image_url", "url", "data"} {
+			if s, ok := x[k].(string); ok && strings.TrimSpace(s) != "" {
+				return strings.TrimSpace(s)
+			}
+			if m, ok := x[k].(map[string]any); ok {
+				if s, ok := m["url"].(string); ok {
+					return strings.TrimSpace(s)
+				}
+			}
+		}
+	}
+	return ""
+}
+
 // runVideoJob 后台跑视频生成，结果写回 job。
-func runVideoJob(j *videoJob) {
+func runVideoJob(j *videoJob, images []pendingUpload) {
 	videoJobsMu.Lock()
 	j.Status = "in_progress"
 	videoJobsMu.Unlock()
@@ -105,7 +191,10 @@ func runVideoJob(j *videoJob) {
 		finishVideoJob(j, nil, "", err.Error())
 		return
 	}
-	_, _, res, err := callGemini(j.Prompt, j.Prompt, mc, nil, nil, nil, nil)
+	if j.Size == "720x1280" {
+		mc.VideoAspect = 17
+	}
+	_, _, res, err := callGemini(j.Prompt, j.Prompt, mc, nil, images, nil, nil)
 	if err != nil {
 		recordRequest("videos", j.Model, j.Prompt, "", res, 502, err.Error(), false)
 		finishVideoJob(j, nil, "", err.Error())

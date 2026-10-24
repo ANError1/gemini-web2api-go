@@ -82,6 +82,8 @@ type ModelConfig struct {
 	// "Nano Banana 2" 这类后端名）。只能用显示名：跟它并排的 hex 现在不管实际用了
 	// 哪个模型都回 Flash-Lite 的那个。
 	Upstream string
+	// VideoAspect is the inner[55] aspect code for video: 16 = 16:9 (default), 17 = 9:16.
+	VideoAspect int
 }
 
 // thinkWire 返回思考档线值（填 header 下标15 / inner[80]）：ThinkWire 显式指定优先，
@@ -617,7 +619,11 @@ func streamGenerateOnce(prompt, latest string, mc ModelConfig, pending []pending
 	}
 	// 视频还要在 inner[55] 指定画幅比例：[[16]]=16:9，[[17]]=9:16（抓包）。
 	if mc.Tool == toolVideo {
-		inner[55] = []interface{}{[]interface{}{16}}
+		aspect := 16
+		if mc.VideoAspect == 17 {
+			aspect = 17
+		}
+		inner[55] = []interface{}{[]interface{}{aspect}}
 	}
 
 	innerJSON, err := json.Marshal(inner)

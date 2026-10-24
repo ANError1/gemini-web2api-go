@@ -1,11 +1,84 @@
 package app
 
 import (
+	"bytes"
+	"encoding/base64"
 	"encoding/json"
+	"mime/multipart"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
 )
+
+// 1x1 PNG
+var tinyPNG, _ = base64.StdEncoding.DecodeString("iVBORw0KGRgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
+
+func TestInputReferenceSrc(t *testing.T) {
+	cases := map[string]any{
+		"data:image/png;base64,AAA": "data:image/png;base64,AAA",
+		"https://x/a.png":           map[string]any{"image_url": "https://x/a.png"},
+		"https://x/b.png":           map[string]any{"image_url": map[string]any{"url": "https://x/b.png"}},
+		"https://x/c.png":           map[string]any{"url": "https://x/c.png"},
+		"":                          nil,
+	}
+	for want, in := range cases {
+		if got := inputReferenceSrc(in); got != want {
+			t.Errorf("inputReferenceSrc(%v) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestCreateVideoAcceptsInputReference(t *testing.T) {
+	dataURL := "data:image/png;base64," + base64.StdEncoding.EncodeToString(tinyPNG)
+
+	// JSON body with a data URL
+	body, _ := json.Marshal(map[string]any{"model": "gemini-video", "prompt": "animate", "input_reference": dataURL})
+	w := httptest.NewRecorder()
+	handleCreateVideo(w, httptest.NewRequest("POST", "/v1/videos", bytes.NewReader(body)))
+	if w.Code != 200 {
+		t.Fatalf("json input_reference: %d %s", w.Code, w.Body)
+	}
+
+	// multipart (OpenAI SDK shape)
+	var mp bytes.Buffer
+	mw := multipart.NewWriter(&mp)
+	_ = mw.WriteField("model", "gemini-video")
+	_ = mw.WriteField("prompt", "animate")
+	fw, _ := mw.CreateFormFile("input_reference", "start.png")
+	_, _ = fw.Write(tinyPNG)
+	_ = mw.Close()
+	req := httptest.NewRequest("POST", "/v1/videos", &mp)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	w = httptest.NewRecorder()
+	handleCreateVideo(w, req)
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"video_`) {
+		t.Fatalf("multipart input_reference: %d %s", w.Code, w.Body)
+	}
+
+	// unusable reference fails the POST, not the job
+	body, _ = json.Marshal(map[string]any{"prompt": "animate", "input_reference": "ftp://nope"})
+	w = httptest.NewRecorder()
+	handleCreateVideo(w, httptest.NewRequest("POST", "/v1/videos", bytes.NewReader(body)))
+	if w.Code != 400 {
+		t.Fatalf("bad input_reference should be 400, got %d", w.Code)
+	}
+}
+
+func TestVideoSize(t *testing.T) {
+	for in, want := range map[string]string{"": "1280x720", "16:9": "1280x720", "720x1280": "720x1280", "9:16": "720x1280", "portrait": "720x1280"} {
+		got, err := videoSize(map[string]any{"size": in})
+		if err != nil || got != want {
+			t.Errorf("size %q -> %q %v, want %q", in, got, err, want)
+		}
+	}
+	if got, _ := videoSize(map[string]any{"aspect_ratio": "9:16"}); got != "720x1280" {
+		t.Errorf("aspect_ratio 9:16 -> %q", got)
+	}
+	if _, err := videoSize(map[string]any{"size": "1:1"}); err == nil {
+		t.Error("1:1 should be rejected")
+	}
+}
 
 func TestHistoryTurnScopesToRid(t *testing.T) {
 	turnA := []any{[]any{"c_1", "r_aaa"}, nil, []any{[]any{"first"}}, []any{[]any{"rc_1111111111", []any{"https://contribution.usercontent.google.com/download?c=A"}}}}
