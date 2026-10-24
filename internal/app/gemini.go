@@ -266,7 +266,7 @@ type StreamResult struct {
 	Artifacts []MediaArtifact
 	// MediaErr 记媒体产物取回失败的原因：生成本身 200 了、但走 hNvQHb / 下载那步挂了。
 	// 调用方据此报错，而不是返回一个只有文字没有图的「半成功」。
-	MediaErr string
+	MediaErr error
 }
 
 // RateLimitError 表示所有 IP slot 都达到了限流上限。
@@ -349,6 +349,22 @@ func (d *deltaTracker) Push(fullText string) string {
 	return delta
 }
 
+// pinnedAccountError 表示 PinAccountID 指定的号用不了：Err 为 nil 是号被删 / 停用，
+// 否则是登录态失效（Err 是取 XSRF 的错）。调用方靠它判断「换下一个号」，不比文案。
+type pinnedAccountError struct {
+	ID  int64
+	Err error
+}
+
+func (e *pinnedAccountError) Error() string {
+	if e.Err == nil {
+		return fmt.Sprintf("account #%d is not available (deleted or disabled)", e.ID)
+	}
+	return fmt.Sprintf("pinned account #%d is not signed in: %v", e.ID, e.Err)
+}
+
+func (e *pinnedAccountError) Unwrap() error { return e.Err }
+
 // streamGenerate POSTs to Gemini's StreamGenerate endpoint and returns raw body
 // plus proxy/timing telemetry for the metrics layer.
 // The 80-slot inner array is verbatim from the Python reference.
@@ -414,7 +430,7 @@ func streamGenerateOnce(prompt, latest string, mc ModelConfig, pending []pending
 	if mc.PinAccountID > 0 {
 		a := accountByID(mc.PinAccountID)
 		if a == nil || a.Status != "enabled" {
-			return &StreamResult{}, fmt.Errorf("account #%d is not available (deleted or disabled)", mc.PinAccountID)
+			return &StreamResult{}, &pinnedAccountError{ID: mc.PinAccountID}
 		}
 		acct = a
 	} else if !anonFirstEligible(mc, len(pending) > 0) {
@@ -531,7 +547,7 @@ func streamGenerateOnce(prompt, latest string, mc ModelConfig, pending []pending
 	}
 	if lastCookieErr != nil && cookieStr == "" {
 		if mc.PinAccountID > 0 {
-			return attrib(fmt.Errorf("pinned account #%d is not signed in: %w", mc.PinAccountID, lastCookieErr))
+			return attrib(&pinnedAccountError{ID: mc.PinAccountID, Err: lastCookieErr})
 		}
 		if !rtCfg().FallbackAnon {
 			// 默认报错而不是降级：cookie 失效后上游不会拒绝，只是把你当匿名用户，
@@ -855,7 +871,7 @@ func streamGenerateOnce(prompt, latest string, mc ModelConfig, pending []pending
 			result.ConvRCID = rcid
 			if aerr != nil {
 				logf("[media] 取回产物失败: %v", aerr)
-				result.MediaErr = aerr.Error()
+				result.MediaErr = aerr
 			} else {
 				result.Artifacts = arts
 				logf("[media] 取回 %d 份产物", len(arts))

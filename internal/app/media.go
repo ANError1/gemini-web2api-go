@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -159,6 +160,10 @@ func fetchMediaArtifacts(tool int, raw, cid, rid, cookie, sapisid, xsrf, proxyUR
 // errVideoQuota prefixes the error when an account's daily video limit is used up;
 // clients can match it and resubmit (the pool's LRU rotation picks another account).
 const errVideoQuota = "video_quota_exhausted"
+
+// errVideoQuotaUsed 是「这个号视频额度用完」的错误。文案以 errVideoQuota 开头给客户端匹配；
+// 程序里判断一律 errors.Is，不比文案，改措辞不会让换号悄悄失效。
+var errVideoQuotaUsed = errors.New(errVideoQuota + ": this account's video generation limit is used up (resets later); resubmit to use another account")
 
 // errVideoRefused prefixes the error when Gemini answers with text instead of
 // starting a video (a refusal); resubmitting the same prompt won't help.
@@ -351,7 +356,7 @@ func fetchDownloadArtifacts(cid, rid, cookie, sapisid, xsrf, proxyURL, defaultMi
 			// quota" status. Nothing will ever arrive, so fail fast instead of polling ~6 min.
 			// Nothing was consumed; the caller can resubmit (LRU picks another account).
 			if strings.Contains(body, "out of video generation quota") || strings.Contains(body, "as soon as your limit resets") {
-				return nil, rcid, fmt.Errorf("%s: this account's video generation limit is used up (resets later); resubmit to use another account", errVideoQuota)
+				return nil, rcid, errVideoQuotaUsed
 			}
 		}
 		time.Sleep(interval)

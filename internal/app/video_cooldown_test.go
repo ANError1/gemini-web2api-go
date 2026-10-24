@@ -45,7 +45,8 @@ func withVideoAccounts(t *testing.T, n int, call func(mc ModelConfig) (*StreamRe
 }
 
 func quotaErr() error {
-	return errors.New(errVideoQuota + ": this account's video generation limit is used up (resets later); resubmit to use another account")
+	// 跟 callGemini 的包法一致：取回失败的原因被 %w 包在外层错误里。
+	return fmt.Errorf("media generation succeeded but artifact retrieval failed: %w", errVideoQuotaUsed)
 }
 
 func newTestJob() *videoJob {
@@ -132,5 +133,25 @@ func TestVideoCooldownExpiresAndLearnsReset(t *testing.T) {
 	videoCooldownMu.Unlock()
 	if exhausted, _ := videoPoolExhausted(); exhausted || videoCoolingAccounts()[ids[0]] {
 		t.Fatal("an expired cooldown should be dropped")
+	}
+}
+
+// 落到登录态失效的号上也在同一任务里换号；判据是错误类型，不是报错文案。
+func TestVideoJobMovesPastASignedOutAccount(t *testing.T) {
+	var tried []int64
+	withVideoAccounts(t, 2, func(mc ModelConfig) (*StreamResult, error) {
+		tried = append(tried, mc.PinAccountID)
+		if len(tried) == 1 {
+			return &StreamResult{AccountID: mc.PinAccountID}, &pinnedAccountError{ID: mc.PinAccountID, Err: errors.New("no SNlM0e")}
+		}
+		return &StreamResult{AccountID: mc.PinAccountID, Artifacts: []MediaArtifact{{Data: []byte("mp4"), Mime: "video/mp4"}}}, nil
+	})
+	j := newTestJob()
+	runVideoJob(j, nil)
+	if j.Status != "completed" || len(tried) != 2 || tried[0] == tried[1] {
+		t.Fatalf("job should finish on the second account: status=%s err=%q tried=%v", j.Status, j.Error, tried)
+	}
+	if videoCoolingAccounts()[tried[0]] {
+		t.Fatal("a signed-out account is not out of video quota and must not be put in the cooldown")
 	}
 }

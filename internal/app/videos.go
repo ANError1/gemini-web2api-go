@@ -11,6 +11,7 @@ package app
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -228,7 +229,7 @@ func runVideoJobWith(j *videoJob, images []pendingUpload, pin int64, cont *ConvR
 		// account is still remembered so new videos skip it.
 		mc.PinAccountID = pin
 		_, _, res, err = videoCall(j.Prompt, j.Prompt, mc, nil, images, nil, nil)
-		if err != nil && strings.Contains(err.Error(), errVideoQuota) {
+		if errors.Is(err, errVideoQuotaUsed) {
 			markVideoExhausted(pin)
 		}
 	} else {
@@ -281,13 +282,13 @@ func callOnVideoAccount(j *videoJob, mc ModelConfig, images []pendingUpload) (*S
 		if err == nil {
 			return res, nil
 		}
-		msg := err.Error()
-		if strings.Contains(msg, errVideoQuota) {
+		if errors.Is(err, errVideoQuotaUsed) {
 			markVideoExhausted(acct.ID)
 			logf("[video] %s: 账号 #%d 额度用完，换下一个账号", j.ID, acct.ID)
 			continue
 		}
-		if strings.Contains(msg, "is not signed in") || strings.Contains(msg, "is not available") {
+		var pinned *pinnedAccountError
+		if errors.As(err, &pinned) {
 			continue
 		}
 		return res, err
