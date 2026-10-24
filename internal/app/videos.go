@@ -41,6 +41,8 @@ type videoJob struct {
 	accountID      int64
 	cid, rid, rcid string
 	turn           int // this job's turn index in the conversation (first = 0)
+	// 生成时 temporary_chat 和 auto_delete_conversation 都关着，会话才留在账号里、才能续写。
+	convKept bool
 }
 
 var (
@@ -211,9 +213,11 @@ func runVideoJobWith(j *videoJob, images []pendingUpload, pin int64, cont *ConvR
 	}
 	mc.PinAccountID = pin
 	mc.Cont = cont
+	kept := !temporaryChatEligible() && !rtCfg().AutoDeleteConversation
 	_, _, res, err := callGemini(j.Prompt, j.Prompt, mc, nil, images, nil, nil)
 	if res != nil {
 		videoJobsMu.Lock()
+		j.convKept = kept
 		j.accountID = res.AccountID
 		j.Account = res.AccountLabel
 		if res.ConvCID != "" {
@@ -285,9 +289,17 @@ func handleExtendVideo(w http.ResponseWriter, r *http.Request, parentID string) 
 	}
 	videoJobsMu.Lock()
 	status, acct, cid, rid, rcid, turn, model, size := p.Status, p.accountID, p.cid, p.rid, p.rcid, p.turn, p.Model, p.Size
+	kept := p.convKept
 	videoJobsMu.Unlock()
 	if status != "completed" {
 		writeJSON(w, 409, map[string]any{"error": map[string]string{"message": "parent video is " + status + "; only completed videos can be extended", "type": "invalid_request_error"}})
+		return
+	}
+	// 用户开的开关优先：临时对话不留会话、自动删会话出完就删，两种情况父会话都不在了，
+	// 发出去只会在一条不存在的会话上白扣一次额度。
+	if !kept {
+		writeJSON(w, 409, map[string]any{"error": map[string]string{"message": "parent video's conversation was not kept upstream " +
+			"(temporary_chat or auto_delete_conversation was on when it was made); extending needs both off", "type": "invalid_request_error"}})
 		return
 	}
 	if acct == 0 || cid == "" || rid == "" || rcid == "" {

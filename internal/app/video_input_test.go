@@ -108,6 +108,15 @@ func TestExtendRequiresCompletedParentWithConvRef(t *testing.T) {
 	if w.Code != 409 {
 		t.Fatalf("parent without conv ref should be 409, got %d %s", w.Code, w.Body)
 	}
+	// 会话引用齐全，但生成时临时对话 / 自动删会话开着 → 会话已不在，也是 409
+	gone := &videoJob{ID: "video_parent2", Status: "completed", Model: "gemini-video", CreatedAt: time.Now().Unix(),
+		accountID: 1, cid: "c_1", rid: "r_1", rcid: "rc_1", convKept: false}
+	putVideoJob(gone)
+	w = httptest.NewRecorder()
+	handleVideoItem(w, httptest.NewRequest("POST", "/v1/videos/video_parent2/extend", strings.NewReader(`{"prompt":"continue"}`)))
+	if w.Code != 409 || !strings.Contains(w.Body.String(), "not kept upstream") {
+		t.Fatalf("parent whose conversation wasn't kept should be 409, got %d %s", w.Code, w.Body)
+	}
 	w = httptest.NewRecorder()
 	handleVideoItem(w, httptest.NewRequest("POST", "/v1/videos/video_nope/extend", strings.NewReader(`{"prompt":"x"}`)))
 	if w.Code != 404 {

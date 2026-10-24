@@ -631,7 +631,7 @@ func streamGenerateOnce(prompt, latest string, mc ModelConfig, pending []pending
 	// 临时对话（#34）：inner[45]=1 让这条不进账号的会话列表、不入训练。只在有登录
 	// cookie 时发——匿名本就不落账号，发了也没意义且没验过。multi_turn 开着时
 	// temporaryChatEligible 直接为假（两者冲突，见那里）。
-	if temporaryChatEligible() && cookieStr != "" && mc.Tool != toolVideo {
+	if temporaryChatEligible() && cookieStr != "" {
 		inner[45] = 1
 	}
 	inner[53] = 0
