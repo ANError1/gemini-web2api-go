@@ -15,6 +15,7 @@ package app
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -70,28 +71,40 @@ func handleAdminVideoQuota(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func accountProxyURL(a CookieAccount) string {
-	if a.ProxyID == 0 {
-		return ""
+// viaSlot 让统计的每一次上游请求都先过 acquireSlot：跟正式请求同一套出口规则
+// （配了代理池就不直连，除非开了 fallback_direct），也记进同一份单 IP 预算。
+// 优先用账号绑的出口；拿不到 slot 就报错，不排队等。
+func viaSlot(a CookieAccount, fn func(proxyURL string) error) error {
+	p, ok, err := acquireSlot(a.ProxyID)
+	if !ok {
+		return fmt.Errorf("no outbound slot: %w", err)
 	}
-	for _, p := range listProxies() {
-		if p.ID == a.ProxyID {
-			return p.URL
-		}
-	}
-	return ""
+	defer releaseSlot(p.ID)
+	return fn(p.URL)
 }
 
 func videoQuotaFor(a CookieAccount, now time.Time, lookback time.Duration) accountQuota {
 	q := accountQuota{ID: a.ID, Label: accountDisplayName(&a)}
-	proxyURL := accountProxyURL(a)
 	sapisid := extractSAPISID(a.Cookie)
-	xsrf, err := getXSRF(a.Cookie, proxyURL)
+	var xsrf string
+	err := viaSlot(a, func(proxyURL string) (err error) {
+		xsrf, err = getXSRF(a.Cookie, proxyURL)
+		return err
+	})
+	var rl *RateLimitError
+	if errors.As(err, &rl) {
+		q.Status, q.Error = "error", err.Error()
+		return q
+	}
 	if err != nil {
 		q.Status, q.Error = "error", "not signed in: "+err.Error()
 		return q
 	}
-	convs, err := listConversations(a.Cookie, sapisid, xsrf, proxyURL, 40)
+	var convs []convSummary
+	err = viaSlot(a, func(proxyURL string) (err error) {
+		convs, err = listConversations(a.Cookie, sapisid, xsrf, proxyURL, 40)
+		return err
+	})
 	if err != nil {
 		q.Status, q.Error = "error", err.Error()
 		return q
@@ -103,7 +116,11 @@ func videoQuotaFor(a CookieAccount, now time.Time, lookback time.Duration) accou
 		}
 		evs, ok := turnCacheGet(c.CID, c.Updated)
 		if !ok {
-			body, err := pollHistoryRaw(c.CID, a.Cookie, sapisid, xsrf, proxyURL)
+			var body string
+			err := viaSlot(a, func(proxyURL string) (err error) {
+				body, err = pollHistoryRaw(c.CID, a.Cookie, sapisid, xsrf, proxyURL)
+				return err
+			})
 			if err != nil {
 				continue
 			}
