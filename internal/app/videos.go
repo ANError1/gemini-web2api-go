@@ -152,6 +152,11 @@ func handleCreateVideo(w http.ResponseWriter, r *http.Request) {
 			"retry_after": retryAfterSeconds(reset)}})
 		return
 	}
+	writeJSON(w, 200, startVideoJob(model, prompt, size, images))
+}
+
+// startVideoJob 建一个视频任务并在后台跑，立即返回（status=queued）。
+func startVideoJob(model, prompt, size string, images []pendingUpload) *videoJob {
 	j := &videoJob{
 		Size:      size,
 		ID:        "video_" + randHex(16),
@@ -163,7 +168,7 @@ func handleCreateVideo(w http.ResponseWriter, r *http.Request) {
 	}
 	putVideoJob(j)
 	go runVideoJob(j, images)
-	writeJSON(w, 200, j)
+	return j
 }
 
 // videoSize maps OpenAI's `size` ("1280x720"/"720x1280") or an `aspect_ratio`
