@@ -57,8 +57,12 @@ func resolveProfile(name string) profiles.ClientProfile {
 // implementation is fragile compared to net/http.
 func getTLSClient() tls_client.HttpClient {
 	imp := effectiveImpersonate()
+	// 缓存 key 带上超时：超时是建客户端时定死的，面板改了 request_timeout_sec
+	// 要换一个新客户端才生效（只按 imp 缓存时要重启进程才生效）。
+	timeout := rtCfg().RequestTimeout
+	key := fmt.Sprintf("%s|%d", imp, timeout)
 	clientCacheMu.RLock()
-	if c, ok := clientCache[imp]; ok {
+	if c, ok := clientCache[key]; ok {
 		clientCacheMu.RUnlock()
 		return c
 	}
@@ -66,11 +70,11 @@ func getTLSClient() tls_client.HttpClient {
 
 	clientCacheMu.Lock()
 	defer clientCacheMu.Unlock()
-	if c, ok := clientCache[imp]; ok {
+	if c, ok := clientCache[key]; ok {
 		return c
 	}
 	opts := []tls_client.HttpClientOption{
-		tls_client.WithTimeoutSeconds(rtCfg().RequestTimeout),
+		tls_client.WithTimeoutSeconds(timeout),
 		tls_client.WithClientProfile(resolveProfile(imp)),
 		tls_client.WithNotFollowRedirects(),
 	}
@@ -79,7 +83,7 @@ func getTLSClient() tls_client.HttpClient {
 		fmt.Fprintf(os.Stderr, "[client] tls-client init failed: %v\n", err)
 		os.Exit(1)
 	}
-	clientCache[imp] = client
+	clientCache[key] = client
 	return client
 }
 
@@ -102,13 +106,16 @@ func getTLSClient() tls_client.HttpClient {
 // 不走代理时仍然用 getTLSClient（保留 utls/chrome146 真指纹优势）。
 
 var (
-	stdlibClientCache sync.Map // proxyURL -> *http.Client
+	stdlibClientCache sync.Map // proxyURL|超时秒数 -> *http.Client
 )
 
 // getStdlibClient returns an http.Client routed through proxyURL.
 // proxyURL must not be empty (caller checks).
 func getStdlibClient(proxyURL string) *http.Client {
-	if cached, ok := stdlibClientCache.Load(proxyURL); ok {
+	// 同 getTLSClient：超时进 key，面板改超时后换新客户端。
+	timeout := rtCfg().RequestTimeout
+	key := fmt.Sprintf("%s|%d", proxyURL, timeout)
+	if cached, ok := stdlibClientCache.Load(key); ok {
 		return cached.(*http.Client)
 	}
 	t := &http.Transport{
@@ -123,14 +130,14 @@ func getStdlibClient(proxyURL string) *http.Client {
 		t.Proxy = http.ProxyURL(u)
 	}
 	c := &http.Client{
-		Timeout:   time.Duration(rtCfg().RequestTimeout) * time.Second,
+		Timeout:   time.Duration(timeout) * time.Second,
 		Transport: t,
 		// 跟 tls-client 一致：不自动跟随重定向（302 是诊断信号）
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
 	}
-	stdlibClientCache.Store(proxyURL, c)
+	stdlibClientCache.Store(key, c)
 	return c
 }
 
