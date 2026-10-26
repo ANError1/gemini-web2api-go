@@ -2,6 +2,23 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## 4.25.0
+
+### 新增
+
+- **Google 原生 Gemini API 接口（#58）**。同一端口新增 `POST /v1beta/models/{model}:generateContent`、
+  `:streamGenerateContent`（真流式；`?alt=sse` 回 SSE，不带回 JSON 数组）、`:countTokens`，以及
+  `GET /v1beta/models`。给只说 Google 格式的客户端用：`google-genai` SDK、Bifrost 等网关的 Google provider。
+  - 支持 function calling：`tools[].functionDeclarations`、`toolConfig.functionCallingConfig`（`AUTO` / `ANY` /
+    `NONE`、`allowedFunctionNames`）、历史里的 `functionCall` / `functionResponse`；模型的调用以 `functionCall`
+    part 返回，SDK 的自动函数调用可用。底下跟 OpenAI 接口同一套 prompt 级实现。
+  - `thinkingConfig.includeThoughts` 时思考摘要以 `thought` part 返回；生图 / 音乐产物以 `inlineData` 返回；
+    `inlineData` / http(s) `fileData` 的图片和视频作为输入（需要 cookie）。
+  - 错误体用 Google 的 `{"error":{code,message,status}}` 形状，状态码跟 OpenAI 接口一致。
+  - 模型名用本项目的（`gemini-3.6-flash` 等）。
+- **API key 也认 `x-goog-api-key` 头和 `?key=` 参数**（Google SDK 的带法），原有的 `Authorization: Bearer` /
+  `x-api-key` 不变。
+
 ## 4.24.1
 
 ### 修复
