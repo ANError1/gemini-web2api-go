@@ -256,13 +256,23 @@
   .cfg-item > label { display: block; font-size: 12.5px; color: var(--text-2); margin-bottom: 6px; }
   .cfg-item input[type=text], .cfg-item input[type=number], .cfg-item select { width: 100%; }
   .cfg-item.wide { grid-column: 1 / -1; }
-  .cfg-item.check { display: flex; align-items: center; gap: 10px;
-                  margin-top: 25px; }  /* 25px = 标签行高 + 下边距，对齐同行输入框 */
-  .cfg-item.check > label { margin: 0; }
-  .cfg-item input[type=checkbox] { width: 18px; height: 18px; flex: none;
-                                   accent-color: var(--nav-on-fg); }
   .rthint { color: var(--muted); font-size: 11.5px; line-height: 1.45; margin-top: 5px; }
-  .cfg-item.check .rthint { margin: 0; }
+  /* 开关：一项一整行，开关在左、标题和说明在右 */
+  .cfg-toggles.after-grid { margin-top: 10px; }
+  .cfg-toggle { display: grid; grid-template-columns: 36px minmax(0, 1fr); column-gap: 14px;
+                align-items: start; padding: 12px 0; border-top: 1px solid var(--outline-soft); }
+  .cfg-toggles:not(.after-grid) .cfg-toggle:first-child { border-top: none; padding-top: 2px; }
+  .cfg-toggle > label { font-size: 13px; color: var(--text); cursor: pointer; line-height: 20px; }
+  .cfg-toggle > .rthint { grid-column: 2; margin-top: 2px; max-width: 760px; }
+  input.switch { appearance: none; -webkit-appearance: none; margin: 0; cursor: pointer;
+                 width: 36px; height: 20px; border-radius: var(--r-pill); position: relative;
+                 background: var(--outline); transition: background .15s; }
+  input.switch::before { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px;
+                         border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(60,64,67,.3);
+                         transition: transform .15s; }
+  input.switch:checked { background: var(--nav-on-fg); }
+  input.switch:checked::before { transform: translateX(16px); }
+  input.switch:focus-visible { outline: 2px solid var(--g-blue); outline-offset: 2px; }
   .cfg-actions { display: flex; gap: 8px; align-items: center; margin-top: 20px;
                  padding-top: 16px; border-top: 1px solid var(--outline-soft); }
 
@@ -950,6 +960,11 @@ const RT_GROUPS = [
         hint: '上游前端版本号。请求大面积失败时先看这里是不是过期了' },
       { k: 'gemini_bl_auto', label: '自动跟随 bl 版本', type: 'bool',
         hint: '每 6 小时从 /app 页面抓一次最新版本号，抓到就用抓到的。抓不到或格式不对就继续用上面钉的值' },
+    ],
+  },
+  {
+    title: '会话与账号',
+    fields: [
       { k: 'auto_delete_conversation', label: '自动删网页会话', type: 'bool',
         hint: '出完结果自动删掉 gemini.google.com 上留下的这条会话，免得登录号里堆一堆。只登录态生效，异步 best-effort，删失败不影响响应' },
       { k: 'temporary_chat', label: '临时对话', type: 'bool',
@@ -991,39 +1006,41 @@ async function loadRtCfg() {
   const data = await api('api/config');
   if (!data) return;
   rtCfgCache = data.config; rtModels = data.models || [];
-  document.getElementById('rtCfgForm').innerHTML = RT_GROUPS.map(g => `
+  // 每组先放输入框类字段（自适应多列网格），开关单独成行排在下面：开关的说明普遍
+  // 很长，塞进网格的窄列里标签会被挤成一字一行。
+  const inputItem = f => {
+    const v = rtCfgCache[f.k];
+    let input;
+    if (f.type === 'select') {
+      input = `<select id="rt_${f.k}">` + rtModels.map(m =>
+        `<option value="${escapeHtml(m)}" ${m === v ? 'selected' : ''}>${escapeHtml(m)}</option>`
+      ).join('') + '</select>';
+    } else if (f.type === 'int') {
+      input = `<input type="number" id="rt_${f.k}" value="${v}" min="${f.min}" max="${f.max}">`;
+    } else {
+      input = `<input type="text" id="rt_${f.k}" value="${escapeHtml(String(v ?? ''))}">`;
+    }
+    return `<div class="cfg-item${f.wide ? ' wide' : ''}">
+      <label for="rt_${f.k}">${f.label}</label>
+      ${input}
+      ${f.hint ? `<div class="rthint">${escapeHtml(f.hint)}</div>` : ''}
+    </div>`;
+  };
+  const toggleItem = f => `<div class="cfg-toggle">
+      <input type="checkbox" class="switch" id="rt_${f.k}" ${rtCfgCache[f.k] ? 'checked' : ''}>
+      <label for="rt_${f.k}">${f.label}</label>
+      ${f.hint ? `<div class="rthint">${escapeHtml(f.hint)}</div>` : ''}
+    </div>`;
+  document.getElementById('rtCfgForm').innerHTML = RT_GROUPS.map(g => {
+    const inputs = g.fields.filter(f => f.type !== 'bool');
+    const toggles = g.fields.filter(f => f.type === 'bool');
+    return `
     <div class="cfg-group">
       <h3>${escapeHtml(g.title)}</h3>
-      <div class="cfg-grid">
-        ${g.fields.map(f => {
-          const v = rtCfgCache[f.k];
-          let input;
-          if (f.type === 'bool') {
-            input = `<input type="checkbox" id="rt_${f.k}" ${v ? 'checked' : ''}>`;
-          } else if (f.type === 'select') {
-            input = `<select id="rt_${f.k}">` + rtModels.map(m =>
-              `<option value="${escapeHtml(m)}" ${m === v ? 'selected' : ''}>${escapeHtml(m)}</option>`
-            ).join('') + '</select>';
-          } else if (f.type === 'int') {
-            input = `<input type="number" id="rt_${f.k}" value="${v}" min="${f.min}" max="${f.max}">`;
-          } else {
-            input = `<input type="text" id="rt_${f.k}" value="${escapeHtml(String(v ?? ''))}">`;
-          }
-          // 复选框把标签放右边，跟输入框类字段的竖排区分开
-          if (f.type === 'bool') {
-            return `<div class="cfg-item check">
-              ${input}<label for="rt_${f.k}">${f.label}</label>
-              ${f.hint ? `<span class="rthint">${escapeHtml(f.hint)}</span>` : ''}
-            </div>`;
-          }
-          return `<div class="cfg-item${f.wide ? ' wide' : ''}">
-            <label for="rt_${f.k}">${f.label}</label>
-            ${input}
-            ${f.hint ? `<div class="rthint">${escapeHtml(f.hint)}</div>` : ''}
-          </div>`;
-        }).join('')}
-      </div>
-    </div>`).join('');
+      ${inputs.length ? `<div class="cfg-grid">${inputs.map(inputItem).join('')}</div>` : ''}
+      ${toggles.length ? `<div class="cfg-toggles${inputs.length ? ' after-grid' : ''}">${toggles.map(toggleItem).join('')}</div>` : ''}
+    </div>`;
+  }).join('');
 
   // 三列（项/值/怎么改）挤在窄栏里读不动，第三列换成 title 悬浮
   const d = data.deploy || {};
@@ -1966,6 +1983,7 @@ const I18N_EN = {
   '流量控制 · 每个 IP slot 独立计数': 'Rate limiting · counted per IP slot',
   '重试与超时': 'Retry & timeout',
   '请求行为': 'Request behavior',
+  '会话与账号': 'Conversations & accounts',
   '代理与 cookie 的降级行为': 'Proxy & cookie fallback behavior',
   '数据与日志': 'Data & logs',
   '并发': 'Concurrency',
