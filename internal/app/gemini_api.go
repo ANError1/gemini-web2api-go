@@ -350,6 +350,8 @@ func handleGeminiModelItem(w http.ResponseWriter, r *http.Request) {
 		writeGeminiError(w, 405, "method not allowed")
 	case action == "generateContent":
 		handleGenerateContent(w, r, model)
+	case action == "streamGenerateContent":
+		handleStreamGenerateContent(w, r, model)
 	case action == "countTokens":
 		handleGeminiCountTokens(w, r)
 	default:
@@ -549,4 +551,141 @@ func handleGenerateContent(w http.ResponseWriter, r *http.Request, model string)
 		"modelVersion":  g.modelName,
 		"responseId":    randHex(16),
 	})
+}
+
+// geminiStream 写 streamGenerateContent 的响应。两种帧格式：
+//   - ?alt=sse：SSE，每块一行 "data: <json>"（SDK 默认就带这个参数）
+//   - 不带：一个 JSON 数组，元素逐块写出（Google REST 的原始写法）
+//
+// 跟 sseWriter 一样第一块才发响应头：开流前出的错还能回正常的 HTTP 状态码。
+type geminiStream struct {
+	w       http.ResponseWriter
+	flusher http.Flusher
+	sse     bool
+	n       int // 已写出的块数
+	model   string
+	rid     string
+}
+
+func (s *geminiStream) Started() bool { return s.n > 0 }
+
+func (s *geminiStream) write(obj interface{}) {
+	b, _ := json.Marshal(obj)
+	if s.n == 0 {
+		if s.sse {
+			s.w.Header().Set("Content-Type", "text/event-stream")
+			s.w.Header().Set("Cache-Control", "no-cache")
+			s.w.Header().Set("X-Accel-Buffering", "no") // 关掉反代对 SSE 的缓冲，见 sse.go
+		} else {
+			s.w.Header().Set("Content-Type", "application/json")
+		}
+		s.w.Header().Set("Access-Control-Allow-Origin", "*")
+		s.w.WriteHeader(200)
+		if !s.sse {
+			io.WriteString(s.w, "[")
+		}
+	}
+	switch {
+	case s.sse:
+		fmt.Fprintf(s.w, "data: %s\r\n\r\n", b)
+	case s.n > 0:
+		fmt.Fprintf(s.w, ",\r\n%s", b)
+	default:
+		s.w.Write(b)
+	}
+	s.n++
+	if s.flusher != nil {
+		s.flusher.Flush()
+	}
+}
+
+func (s *geminiStream) chunk(parts []interface{}, finish string, usage map[string]int) {
+	c := map[string]interface{}{
+		"candidates":   []interface{}{geminiCandidate(parts, finish)},
+		"modelVersion": s.model,
+		"responseId":   s.rid,
+	}
+	if usage != nil {
+		c["usageMetadata"] = usage
+	}
+	s.write(c)
+}
+
+func (s *geminiStream) text(d string) {
+	s.chunk([]interface{}{map[string]interface{}{"text": d}}, "", nil)
+}
+
+func (s *geminiStream) thought(d string) {
+	s.chunk([]interface{}{map[string]interface{}{"text": d, "thought": true}}, "", nil)
+}
+
+// fail 在已开流后报错：HTTP 状态码改不了了，就把 Google 形状的错误体当最后一块发出去。
+func (s *geminiStream) fail(err error) {
+	s.write(map[string]interface{}{"error": map[string]interface{}{
+		"code": 502, "message": err.Error(), "status": geminiStatus(502)}})
+	s.end()
+}
+
+func (s *geminiStream) end() {
+	if !s.sse && s.n > 0 {
+		io.WriteString(s.w, "]")
+	}
+}
+
+func handleStreamGenerateContent(w http.ResponseWriter, r *http.Request, model string) {
+	g, ok := prepareGemini(w, r, model)
+	if !ok {
+		return
+	}
+	f, _ := w.(http.Flusher)
+	st := &geminiStream{w: w, flusher: f, sse: r.URL.Query().Get("alt") == "sse",
+		model: g.modelName, rid: randHex(16)}
+	includeThoughts := g.req.GenerationConfig.ThinkingConfig.IncludeThoughts
+
+	// 带工具时正文过围栏闸门，跟 OpenAI 两条路一样：围栏原文不能推给客户端。
+	var gate *toolFenceGate
+	onDelta := st.text
+	if len(g.tools) > 0 {
+		gate = newToolFenceGate(st.text)
+		onDelta = gate.Push
+	}
+	var onReasoning func(string)
+	if includeThoughts {
+		onReasoning = st.thought
+	}
+
+	text, calls, res, err := runGeminiCall(g, onDelta, onReasoning)
+	if err != nil {
+		status := 502
+		if _, ok := err.(*ModelDowngradedError); ok {
+			status = 429
+		}
+		recordRequest("gemini.streamGenerateContent", g.modelName, g.prompt, "", res, status, err.Error(), true)
+		if st.Started() {
+			st.fail(err)
+			return
+		}
+		writeGeminiCallError(w, err)
+		return
+	}
+	recordRequest("gemini.streamGenerateContent", g.modelName, g.prompt, text, res, 200, "", true)
+
+	t := newGeminiTurn(text, calls, res)
+	// 补发真流式没推到的尾巴：思考在前、正文在后，保持「先思考后回答」的顺序。
+	if includeThoughts && res != nil && t.reasoning != "" {
+		if rest := remainingOf(t.reasoning, res.EmittedReasoning); rest != "" {
+			st.thought(rest)
+		}
+	}
+	var parts []interface{}
+	if rest := remainingOf(t.text, sentText(res, gate)); rest != "" {
+		parts = append(parts, map[string]interface{}{"text": rest})
+	}
+	parts = append(parts, callParts(t.calls)...)
+	parts = append(parts, artifactParts(t.artifacts)...)
+	if len(parts) == 0 {
+		parts = append(parts, map[string]interface{}{"text": ""})
+	}
+	st.chunk(parts, "STOP", geminiUsage(g.prompt, t))
+	st.end()
 }
