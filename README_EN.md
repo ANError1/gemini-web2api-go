@@ -23,6 +23,7 @@ Turn the Google Gemini web app into an OpenAI-compatible API. **Single binary**,
 - [Features](#features)
 - [Quick start](#quick-start)
 - [Connecting clients](#connecting-clients)
+- [Gemini native API](#gemini-native-api)
 - [MCP tools](#mcp-tools)
 - [Admin panel](#admin-panel)
 - [Models](#models)
@@ -58,6 +59,7 @@ This is not a wrapper around Google's official API ([generativelanguage.googleap
 
 **API**
 - OpenAI-compatible: `/v1/chat/completions`, `/v1/models`, `/v1/responses`
+- Gemini native format: `/v1beta/models/{model}:generateContent` / `:streamGenerateContent`, usable directly by Google's SDKs and gateways' Google providers, function calling included (see [Gemini native API](#gemini-native-api))
 - `/v1/videos`: OpenAI (Sora)-shaped async video generation — `POST` to create, `GET /v1/videos/{id}` to poll, `GET /v1/videos/{id}/content` to download the MP4 (needs a signed-in Pro cookie)
   - image → video: `input_reference` (start frame) as a data/http(s) URL, `{"image_url": …}`, or a multipart file (OpenAI SDK shape)
   - `size` (`1280x720` / `720x1280`) or `aspect_ratio` (`16:9` / `9:16`)
@@ -66,7 +68,7 @@ This is not a wrapper around Google's official API ([generativelanguage.googleap
   - video quota routing: an account whose video budget runs out is skipped for new videos until it resets, and a job that lands on one moves to the next account inside the same job. When every account is cooling down, `POST /v1/videos` answers `429` with `code: video_quota_exhausted` and `Retry-After`, and a running job fails with `retry_after=N` (seconds until the first reset)
   - `GET /admin/api/video-quota` (admin): per-account video usage in the rolling 5-hour window, status and reset time, read from each account's own Gemini history (read-only; Google's own reset time when a refusal carries it, otherwise first video + 5 h). Each refresh costs about 2 + N upstream requests per account (N = conversations updated in the last few hours; unchanged ones are cached), sent through the proxy pool and counted against the per-IP budget, so don't poll it. With `temporary_chat` or `auto_delete_conversation` on, videos made through this proxy aren't in the history and are undercounted (the response carries a `history_incomplete` note)
 - Real incremental streaming for plain chat (requests with `tools`, and `/v1/responses`, are buffered then sent)
-- Bearer token / `x-api-key` auth; the key can be rotated from the panel
+- Bearer token / `x-api-key` / `x-goog-api-key` auth; the key can be rotated from the panel
 - `usage` computed with tiktoken; `reasoning_tokens` counted separately, not folded
   into `completion_tokens`
 
@@ -219,9 +221,48 @@ Every OpenAI-compatible client (Cherry Studio / ChatBox / Open WebUI / dify / Cu
 
 **Codex CLI** uses `/v1/responses` — point its base URL at `http://localhost:8083/v1`. The endpoint is implemented, but it is not incrementally streamed (see the protocol coverage table).
 
-**Gemini CLI cannot connect.** It expects Google's native `/v1beta/models/{model}:generateContent`; this project only exposes OpenAI-shaped endpoints and does not implement `/v1beta`.
+**Google-format clients** (the `google-genai` SDK, gateways' Google providers) use `/v1beta`; see [Gemini native API](#gemini-native-api) below. Gemini CLI has not been tested.
 
 There is also an unauthenticated health check at `GET /` returning `{"status":"ok","version":…,"models":[…]}`.
+
+## Gemini native API
+
+The same port also speaks the Google Gemini API format, for clients that only talk Google's wire format (Google's
+`google-genai` SDK, the Google provider in gateways such as Bifrost):
+
+| Path | Notes |
+|---|---|
+| `POST /v1beta/models/{model}:generateContent` | Non-streaming |
+| `POST /v1beta/models/{model}:streamGenerateContent` | Real streaming; SSE with `?alt=sse` (the SDK default), a JSON array without it |
+| `POST /v1beta/models/{model}:countTokens` | Local tiktoken estimate |
+| `GET /v1beta/models`, `GET /v1beta/models/{model}` | Model list, same as `/v1/models` |
+
+- **Auth**: send the API key as the `x-goog-api-key` header or the `?key=` query parameter (what the SDKs do);
+  `Authorization: Bearer` works too.
+- **Model names** are this project's (`gemini-3.6-flash`, `gemini-3.1-pro`, …, see [Models](#models)), not the official
+  API's `gemini-2.5-flash` and so on.
+- **Function calling**: `tools[].functionDeclarations`, `toolConfig.functionCallingConfig` (`AUTO` / `ANY` / `NONE`,
+  `allowedFunctionNames`), and `functionCall` / `functionResponse` in the history are all accepted; the model's calls
+  come back as `functionCall` parts, and the SDK's automatic function calling works. Underneath it is the same
+  prompt-level implementation as the OpenAI endpoints, with the same limits (see the Function calling row in
+  [protocol coverage](#openai-protocol-coverage)).
+- **Thinking**: with `generationConfig.thinkingConfig.includeThoughts: true`, the thought summary comes back as a part
+  with `thought: true` (only for models that produce one).
+- **Image / video input**: `inlineData`, or `fileData` with an http(s) link; needs a cookie. There is no Files API, so
+  `files/…` URIs and other types (PDF, audio) return 400.
+- **Image / music generation**: with `gemini-image` / `gemini-music`, the output comes back as `inlineData` parts.
+- Sampling settings in `generationConfig` (`temperature`, `maxOutputTokens`, …) are accepted and ignored;
+  `candidateCount` > 1 returns 400.
+- Errors use Google's shape `{"error":{"code","message","status"}}`, with the same status codes as the OpenAI endpoints.
+
+```python
+from google import genai
+from google.genai import types
+
+client = genai.Client(api_key="sk-gemini-...",
+                      http_options=types.HttpOptions(base_url="http://localhost:8083"))
+print(client.models.generate_content(model="gemini-3.6-flash", contents="Hello!").text)
+```
 
 ## MCP tools
 
@@ -531,7 +572,7 @@ This does not change the blocking threshold, though: in a same-start comparison,
 | `POST /v1/responses` | ✅ | OpenAI Responses API (used by Codex CLI). **Not incrementally streamed** — still buffered, then emitted as the event sequence |
 | `GET /v1/models` | ✅ | 2 models anonymously, the third appears once a cookie is set |
 | `GET /` | ✅ | Health check, unauthenticated, returns status/version/models |
-| `/v1beta/models/…` (Gemini CLI native) | ❌ | Not implemented, only OpenAI-shaped endpoints are exposed |
+| `/v1beta/models/…` (Google native format) | ✅ | See [Gemini native API](#gemini-native-api) |
 | `/v1/embeddings`, `/v1/images/*`, `/v1/audio/*` | ❌ | Not implemented, return 404 |
 | Function calling | ⚠️ | Prompt-level implementation (the model emits a ` ```tool_call``` ` block that we parse with a regex), not a real protocol layer. **Reliable for looking up private data or internal systems**, but anything Gemini can answer itself (the weather) gets answered directly, and side-effecting actions (sending email) are refused. **Agentic clients (Codex, etc.) now work**: before 4.11.0 their tens-of-KB system prompts buried our tool instructions and caused off-topic replies; fixed now. Since 4.12.0 tool results are condensed into a clear success/failure signal, so weak models no longer misread a no-output success as a failure and loop retrying (measured: the same task dropped from 26 loops to 2-4 before it concludes) |
 | `tool_choice` | ⚠️ | `none` injects no tool definitions at all; `required` and a named function add mandatory wording and drop the other tools from the prompt. A prompt-level layer **cannot truly force it** — in testing, questions the model can answer itself (weather, 2+2) were answered directly even under `required` |

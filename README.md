@@ -23,6 +23,7 @@
 - [功能](#功能)
 - [快速开始](#快速开始)
 - [客户端接入](#客户端接入)
+- [Gemini 原生接口](#gemini-原生接口)
 - [MCP 工具](#mcp-工具)
 - [管理面板](#管理面板)
 - [模型](#模型)
@@ -58,6 +59,7 @@
 
 **接口**
 - OpenAI 兼容：`/v1/chat/completions`、`/v1/models`、`/v1/responses`
+- Gemini 原生格式：`/v1beta/models/{model}:generateContent` / `:streamGenerateContent`，Google SDK 和网关的 Google provider 直接能用，含 function calling（见 [Gemini 原生接口](#gemini-原生接口)）
 - `/v1/videos`：OpenAI(Sora) 形状的异步视频生成——`POST` 建任务、`GET /v1/videos/{id}` 轮询、`GET /v1/videos/{id}/content` 下 MP4（要登录态 Pro 号）
   - 图生视频：`input_reference`（首帧），可以是 data/http(s) URL、`{"image_url": …}`，或 multipart 文件（OpenAI SDK 的形状）
   - `size`（`1280x720` / `720x1280`）或 `aspect_ratio`（`16:9` / `9:16`）
@@ -66,7 +68,7 @@
   - 视频额度换号：某个账号视频额度用完后，新视频会跳过它直到额度重置；任务落到这样的账号时会在同一个任务里换下一个账号。所有账号都在冷却时，`POST /v1/videos` 直接回 `429`（`code: video_quota_exhausted`，带 `Retry-After`），进行中的任务以 `retry_after=N`（距最早重置的秒数）失败
   - `GET /admin/api/video-quota`（管理接口）：每个账号滚动 5 小时窗口内的视频用量、状态和重置时间，读取各账号自己的 Gemini 历史（只读；拒绝消息里带 Google 的重置时间时用它，否则按首个视频 + 5 小时估算）。每次刷新每个号约 2 + N 次上游请求（N = 近几小时有更新的会话数，没变的走缓存），走代理池、计入单 IP 预算，别频繁轮询。开着 `temporary_chat` 或 `auto_delete_conversation` 时本服务生成的视频不在历史里，计数会偏少（响应里有 `history_incomplete` 提示）
 - 普通对话真流式：上游每出一帧就转发增量（带 `tools` 的请求和 `/v1/responses` 是收完再发）
-- Bearer token / `x-api-key` 鉴权，key 可在面板轮换
+- Bearer token / `x-api-key` / `x-goog-api-key` 鉴权，key 可在面板轮换
 - `usage` 用 tiktoken 算，`reasoning_tokens` 单列不计入 `completion_tokens`
 
 **模型**
@@ -215,10 +217,45 @@ docker 里就写 `http://host.docker.internal:8083` 或容器名），密钥填 
 **Codex CLI** 走 `/v1/responses`，把 base url 指到 `http://localhost:8083/v1` 即可（该端点已实现，
 但不是增量流式，见下面的协议覆盖表）。
 
-**Gemini CLI 接不了**：它要的是 Google 原生的 `/v1beta/models/{model}:generateContent`，本项目只暴露
-OpenAI 形状的接口，没做 `/v1beta`。
+**Google 格式的客户端**（`google-genai` SDK、网关的 Google provider）走 `/v1beta`，见下面的
+[Gemini 原生接口](#gemini-原生接口)。Gemini CLI 没实测过。
 
 另有一个不鉴权的健康检查 `GET /`，返回 `{"status":"ok","version":…,"models":[…]}`，给探活用。
+
+## Gemini 原生接口
+
+同一个端口也说 Google Gemini API 的格式，给只认 Google 格式的客户端用（Google 的 `google-genai` SDK、
+Bifrost 等网关的 Google provider）：
+
+| 路径 | 说明 |
+|---|---|
+| `POST /v1beta/models/{model}:generateContent` | 非流式 |
+| `POST /v1beta/models/{model}:streamGenerateContent` | 真流式；带 `?alt=sse`（SDK 默认）回 SSE，不带回 JSON 数组 |
+| `POST /v1beta/models/{model}:countTokens` | 本地 tiktoken 估算 |
+| `GET /v1beta/models`、`GET /v1beta/models/{model}` | 模型清单，跟 `/v1/models` 同一份 |
+
+- **鉴权**：API key 放 `x-goog-api-key` 头或 `?key=` 参数（SDK 默认这么带），`Authorization: Bearer` 也认。
+- **模型名**用本项目的（`gemini-3.6-flash`、`gemini-3.1-pro` 等，见[模型](#模型)），不是官方 API 的 `gemini-2.5-flash` 那些。
+- **function calling**：`tools[].functionDeclarations`、`toolConfig.functionCallingConfig`（`AUTO` / `ANY` / `NONE`、
+  `allowedFunctionNames`）、历史里的 `functionCall` / `functionResponse` 都认，模型的调用以 `functionCall` part 返回，
+  SDK 的自动函数调用也能用。底下跟 OpenAI 接口是同一套 prompt 级实现，限制也一样（见[协议覆盖](#openai-协议覆盖)
+  里 Function calling 那一行）。
+- **思考**：带 `generationConfig.thinkingConfig.includeThoughts: true` 时，思考摘要以 `thought: true` 的 part 返回
+  （只有会出思考链的模型才有）。
+- **图片 / 视频输入**：`inlineData`，或 `fileData` 填 http(s) 链接，需要 cookie。没有 Files API，`files/…` 形式的
+  `fileUri` 和其它类型（PDF、音频）回 400。
+- **生图 / 音乐**：用 `gemini-image` / `gemini-music` 时，产物以 `inlineData` part 返回。
+- `generationConfig` 里的采样参数（`temperature`、`maxOutputTokens` 等）收下即忽略；`candidateCount` > 1 回 400。
+- 错误体是 Google 的形状 `{"error":{"code","message","status"}}`，状态码跟 OpenAI 接口一致。
+
+```python
+from google import genai
+from google.genai import types
+
+client = genai.Client(api_key="sk-gemini-...",
+                      http_options=types.HttpOptions(base_url="http://localhost:8083"))
+print(client.models.generate_content(model="gemini-3.6-flash", contents="Hello!").text)
+```
 
 ## MCP 工具
 
@@ -601,7 +638,7 @@ Chrome 指纹得有别的理由（比如担心长期账号画像），不能指�
 | `POST /v1/responses` | ✅ | OpenAI Responses API（Codex CLI 用）。**未做真流式**，仍是收完再按事件序列发 |
 | `GET /v1/models` | ✅ | 匿名 2 个，挂了 cookie 才出第 3 个 |
 | `GET /` | ✅ | 健康检查，不鉴权，返回 status/version/models |
-| `/v1beta/models/…`（Gemini CLI 原生格式） | ❌ | 未实现，只暴露 OpenAI 形状的接口 |
+| `/v1beta/models/…`（Google 原生格式） | ✅ | 见 [Gemini 原生接口](#gemini-原生接口) |
 | `/v1/embeddings`、`/v1/images/*`、`/v1/audio/*` | ❌ | 未实现，返回 404 |
 | Function calling | ⚠️ | Prompt 级实现（让模型输出 ` ```tool_call``` ` 块再 regex 解析），不是真协议层。**查私有数据/内部系统类可靠**，但 Gemini 自己能做的（如查天气）会被它直接回答，有副作用的动作（如发邮件）会被拒绝。**agentic 客户端（Codex 等）已可用**：4.11.0 前它们几十 KB 的系统提示会把工具指令冲没导致「已读乱回」，现已修复；4.12.0 起工具结果压成清爽成功/失败信号，弱模型不再因「命令无输出」误判失败而反复重试（实测同一任务从 26 轮循环降到 2-4 轮收尾）|
 | `tool_choice` | ⚠️ | `none` 完全不注入工具定义；`required` 和指定函数会加强制措辞、并把其余工具从 prompt 裁掉。但 prompt 级实现**无法真正强制**——实测模型自己答得上来的问题（天气、2+2）即使 `required` 也照样直接作答 |
