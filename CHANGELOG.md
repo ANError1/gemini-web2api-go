@@ -2,6 +2,14 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## 4.24.1
+
+### 修复
+
+- **面板改 `request_timeout_sec` 不重启就不生效（#55）**。HTTP 客户端在创建时把超时定死并缓存，
+  保存设置后新请求仍用旧超时（比如面板显示 180，实际还按之前的 20 秒断开，日志是
+  `Client.Timeout` / `context deadline exceeded`）。现在改完立刻生效，跟面板的说明一致。
+
 ## 4.24.0
 
 ### 新增
