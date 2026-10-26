@@ -2,8 +2,10 @@ package app
 
 import (
 	"fmt"
+	"net/http"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/pkoukk/tiktoken-go"
 )
@@ -20,6 +22,12 @@ var (
 
 func initTokenizer() {
 	tokenizerOnce.Do(func() {
+		// tiktoken-go 用 http.Get 下载词表且不设超时。在 Vercel 这类 serverless
+		// 环境里，冷启动时外网稍慢就会把函数启动整个卡死（表现为 500）。给默认
+		// client 加个上限，超时就走 chars/4 估算，不阻塞服务启动。
+		if http.DefaultClient.Timeout == 0 {
+			http.DefaultClient.Timeout = 15 * time.Second
+		}
 		// tiktoken-go 第一次加载会从远端下 cl100k_base.tiktoken (~3MB)，
 		// 缓存到 ${TIKTOKEN_CACHE_DIR} 或 ${HOME}/.cache/tiktoken。
 		// docker 镜像里建议预先 docker build 时缓存。
