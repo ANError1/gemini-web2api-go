@@ -129,3 +129,9 @@ func loadConfig(path string) error {
 	}
 	return json.Unmarshal(data, &cfg)
 }
+
+// onVercel 判断当前进程是否跑在 Vercel Functions 里。
+// VERCEL=1 是构建/运行时都会注入的系统变量，VERCEL_ENV 作为兜底。
+func onVercel() bool {
+	return os.Getenv("VERCEL") != "" || os.Getenv("VERCEL_ENV") != ""
+}

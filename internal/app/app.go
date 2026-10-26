@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -53,6 +55,12 @@ func Run() {
 	}
 	if *port > 0 {
 		cfg.Port = *port
+	} else if p := strings.TrimSpace(os.Getenv("PORT")); p != "" {
+		// Vercel 等 serverless 平台把端口注入 PORT，函数进程必须绑到它上面，
+		// 否则平台探活连不上，所有请求都会变成 FUNCTION_INVOCATION_FAILED。
+		if n, err := strconv.Atoi(p); err == nil && n > 0 {
+			cfg.Port = n
+		}
 	}
 	if *cookieFile != "" {
 		cfg.CookieFile = *cookieFile
@@ -71,6 +79,16 @@ func Run() {
 	}
 	if envTok := os.Getenv("ADMIN_TOKEN"); envTok != "" && cfg.AdminToken == "" {
 		cfg.AdminToken = envTok
+	}
+
+	// serverless 平台的文件系统只读，只有临时目录可写。Vercel 上默认把 SQLite
+	// 落到 /tmp，否则启动时建 ./data 失败会直接 os.Exit(1)，平台报 500。
+	if onVercel() && os.Getenv("SQL_DSN") == "" && !filepath.IsAbs(cfg.DBPath) {
+		name := filepath.Base(cfg.DBPath)
+		if name == "." || name == "/" || name == "" {
+			name = "gemini.db"
+		}
+		cfg.DBPath = filepath.Join(os.TempDir(), "gemini-web2api", name)
 	}
 
 	// boot DB and load proxy pool
@@ -201,11 +219,24 @@ func Run() {
 	fmt.Printf("  Retry:       %dx / %ds\n", rtCfg().RetryAttempts, rtCfg().RetryDelaySec)
 	fmt.Println()
 	warnEnvProxyIgnored()
+	warnVercelEphemeral()
 
 	if err := server.ListenAndServe(); err != nil {
 		fmt.Fprintf(os.Stderr, "server error: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// warnVercelEphemeral 提醒 Vercel 部署的持久化限制。
+// /tmp 只跟当前函数实例同生共死：冷启动后 SQLite 会被重建，API key、
+// Cookie 池和面板配置都会丢。要留住这些数据只能接外部 MySQL/Postgres。
+func warnVercelEphemeral() {
+	if !onVercel() || os.Getenv("SQL_DSN") != "" {
+		return
+	}
+	fmt.Printf("  ⚠ Vercel 上 SQLite 落在临时目录 %s，函数实例重启后会丢失（API key 会重新生成）。\n"+
+		"    持久化请连接 Postgres/MySQL 并设置 SQL_DSN，或设置 API_KEY 环境变量固定 API key。\n\n",
+		cfg.DBPath)
 }
 
 // warnEnvProxyIgnored 在设了代理环境变量、但代理池是空的时候提醒一句。
